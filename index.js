@@ -195,9 +195,9 @@ sliderPanel.position.set(0.07, 0.02, -0.05); // a bit higher/closer than before
 
 // Stronger tilt upward (X-axis) and rotate toward user's right (Y-axis)
 sliderPanel.rotation.set(
-  THREE.MathUtils.degToRad(-35),  // X rotation → tilt UP more (negative = face user)
+  THREE.MathUtils.degToRad(0),  // X rotation → tilt UP more (negative = face user)
   THREE.MathUtils.degToRad(25),  // Y rotation → rotate toward user's right
-  0                               // Z rotation → leave flat
+  THREE.MathUtils.degToRad(25)                               // Z rotation → leave flat
 );
 
 // Tilt UP by ~20 degrees around local X on the middle node (in radians)

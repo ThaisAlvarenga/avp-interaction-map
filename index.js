@@ -24,8 +24,7 @@ document.body.appendChild(renderer.domElement);
 // XR button
 document.body.appendChild(XRButton.createButton(renderer, {
   requiredFeatures: ['local-floor'],
-  optionalFeatures: ['hand-tracking', 'dom-overlay'],
-  domOverlay: { root: document.body }
+  optionalFeatures: ['hand-tracking']   // keep hand tracking if available
 }));
 
 // --- SCENE AND CAMERA ---
@@ -63,6 +62,7 @@ dir.castShadow = true;
 scene.add(dir);
 
 // --- FLOOR ---
+
 // large plane as floor
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(10, 10),
@@ -76,6 +76,7 @@ floor.receiveShadow = true;
 scene.add(floor);
 
 // --- BOX ---
+
 const box = new THREE.Mesh(
 // box geometry and standard material
   new THREE.BoxGeometry(0.4, 0.4, 0.4),
@@ -89,6 +90,7 @@ box.castShadow = true;
 scene.add(box);
 
 // --- RESIZE ---
+
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -157,53 +159,31 @@ function handleController(controller) {
   }
 }
 
-// ---------- HUD ----------
-const hud = document.createElement('div');
-hud.style.position = 'fixed';
-hud.style.right = '12px';
-hud.style.top = '12px';
-hud.style.padding = '10px 12px';
-hud.style.background = 'rgba(0,0,0,0.55)';
-hud.style.color = '#fff';
-hud.style.font = '12px/1.35 system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-hud.style.maxWidth = '360px';
-hud.style.whiteSpace = 'pre';
-hud.style.pointerEvents = 'none';
-hud.style.borderRadius = '10px';
-hud.style.backdropFilter = 'blur(6px)';
-hud.textContent = 'XR Input: (waiting for session)';
-document.body.appendChild(hud);
-
-// ---------- Input helpers ----------
-const PINCH_THRESHOLD_METERS = 0.018; // ~1.8 cm feels right on AVP; tune to taste
-
+// ---------- INPUT MAP (hands/controllers) ----------
+const PINCH_THRESHOLD_METERS = 0.018;
 function formatFloat(x, d=2) { return (x!==undefined && x!==null) ? x.toFixed(d) : '—'; }
 
 function snapshotInputs(session, frame, referenceSpace) {
   const lines = [];
   for (const src of session.inputSources) {
     const kind = src.hand ? 'hand' : (src.gamepad ? 'gamepad' : src.targetRayMode);
-    const hand  = src.handedness || 'none';
-    const profs = (src.profiles && src.profiles.length) ? src.profiles.join(',') : '—';
+    const hand = src.handedness || 'none';
+    const profs = (src.profiles?.length ? src.profiles.join(',') : '—');
 
-    // Buttons/axes if a controller exposes Gamepad
     let btnInfo = '';
     if (src.gamepad) {
-      const pressed = src.gamepad.buttons.map((b,i)=> (b.pressed?`B${i}`:null)).filter(Boolean).join(' ');
+      const pressed = src.gamepad.buttons.map((b,i)=> b.pressed ? `B${i}` : null).filter(Boolean).join(' ');
       const axes    = src.gamepad.axes.map(a=>formatFloat(a,2)).join(', ');
       btnInfo = ` | buttons: ${pressed || 'none'} | axes: [${axes}]`;
     }
 
-    // Hand tracking pinch detector (thumb tip ↔︎ index tip distance)
     let pinchInfo = '';
     if (src.hand && frame && referenceSpace) {
       const ht = src.hand;
-      const tipIndex = ht.get('index-finger-tip') || ht[XRHand.INDEX_PHALANX_TIP];
-      const tipThumb = ht.get('thumb-tip')        || ht[XRHand.THUMB_PHALANX_TIP];
-
+      const tipIndex = ht.get?.('index-finger-tip') || ht[XRHand?.INDEX_PHALANX_TIP];
+      const tipThumb = ht.get?.('thumb-tip')        || ht[XRHand?.THUMB_PHALANX_TIP];
       const pIndex = tipIndex ? frame.getJointPose(tipIndex, referenceSpace) : null;
       const pThumb = tipThumb ? frame.getJointPose(tipThumb, referenceSpace) : null;
-
       if (pIndex && pThumb) {
         const dx = pIndex.transform.position.x - pThumb.transform.position.x;
         const dy = pIndex.transform.position.y - pThumb.transform.position.y;
@@ -216,50 +196,82 @@ function snapshotInputs(session, frame, referenceSpace) {
       }
     }
 
-    lines.push(
-      `[${hand}] ${kind} | targetRay: ${src.targetRayMode || '—'} | profiles: ${profs}${btnInfo}${pinchInfo}`
-    );
+    lines.push(`[${hand}] ${kind} | targetRay: ${src.targetRayMode || '—'} | profiles: ${profs}${btnInfo}${pinchInfo}`);
   }
   return lines.length ? lines.join('\n') : 'No inputSources (hands/controllers not detected).';
 }
 
-// ---------- Events for high-level actions ----------
+// High-level action flags
 const activeFlags = { selectL:false, selectR:false, squeezeL:false, squeezeR:false };
-
-function labelFrom(src) {
-  const h = src.handedness || 'none';
-  return h[0].toUpperCase(); // L / R / N
-}
+function labelFrom(src) { return (src.handedness || 'none')[0].toUpperCase(); }
 
 function bindInputEvents(session) {
   session.addEventListener('selectstart',  (e)=> activeFlags['select'+labelFrom(e.inputSource)] = true);
   session.addEventListener('selectend',    (e)=> activeFlags['select'+labelFrom(e.inputSource)] = false);
   session.addEventListener('squeezestart', (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = true);
   session.addEventListener('squeezeend',   (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = false);
-
-  session.addEventListener('inputsourceschange', (e) => {
-    // Just to surface connect/disconnect in the HUD
-    const added   = e.added?.map(s=>`${s.handedness||'none'}:${s.hand?'hand':(s.gamepad?'gamepad':s.targetRayMode)}`).join(', ');
-    const removed = e.removed?.map(s=>`${s.handedness||'none'}:${s.hand?'hand':(s.gamepad?'gamepad':s.targetRayMode)}`).join(', ');
-    if (added)   console.log('[inputsourceschange] added:', added);
-    if (removed) console.log('[inputsourceschange] removed:', removed);
-  });
 }
 
-// Hook on session start/end so we can read joint poses
+// --- XR ref space ---
 let xrRefSpace = null;
 renderer.xr.addEventListener('sessionstart', async () => {
   const session = renderer.xr.getSession();
   xrRefSpace = await session.requestReferenceSpace('local-floor');
   bindInputEvents(session);
-  hud.textContent = 'XR Input: session started… show hands/controllers to see data.';
+  ensureWorldHud();
+  setHudText('XR Input: session started…');
 });
 
 renderer.xr.addEventListener('sessionend', () => {
   xrRefSpace = null;
-  hud.textContent = 'XR Input: session ended';
+  setHudText('XR Input: session ended');
 });
 
+// ===== World-space HUD (head-locked) =====
+let hudCanvas, hudCtx, hudTexture, hudMesh;
+
+function ensureWorldHud() {
+  if (hudMesh) return;
+  hudCanvas = document.createElement('canvas');
+  hudCanvas.width = 1024;
+  hudCanvas.height = 512;
+  hudCtx = hudCanvas.getContext('2d');
+
+  hudTexture = new THREE.CanvasTexture(hudCanvas);
+  hudTexture.colorSpace = THREE.SRGBColorSpace;
+
+  const mat = new THREE.MeshBasicMaterial({
+    map: hudTexture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false
+  });
+
+  const geo = new THREE.PlaneGeometry(0.9, 0.45); // ~90cm x 45cm
+  hudMesh = new THREE.Mesh(geo, mat);
+  hudMesh.renderOrder = 9999;
+  hudMesh.position.set(0, -0.06, -0.85); // center, slightly below gaze
+  camera.add(hudMesh);
+  scene.add(camera);
+}
+
+function drawHud(text) {
+  if (!hudCanvas) return;
+  const W = hudCanvas.width, H = hudCanvas.height;
+  hudCtx.clearRect(0, 0, W, H);
+  hudCtx.fillStyle = 'rgba(0,0,0,0.55)';
+  hudCtx.fillRect(0, 0, W, H);
+  hudCtx.fillStyle = '#ffffff';
+  hudCtx.font = '28px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+  hudCtx.textBaseline = 'top';
+  const lines = String(text).split('\n');
+  const lineH = 34;
+  let y = 16;
+  for (const line of lines) { hudCtx.fillText(line, 16, y); y += lineH; }
+  hudTexture.needsUpdate = true;
+}
+
+function setHudText(text) { drawHud(text); }
 // ---------- Update HUD every frame ----------
 const _render = renderer.render.bind(renderer);
 
@@ -278,7 +290,8 @@ renderer.setAnimationLoop((t) => {
     ? snapshotInputs(session, frame, xrRefSpace)
     : 'XR session not active.';
 
-  hud.textContent = `${header}\n${details}`;
+//   hud.textContent = `${header}\n${details}`;
+  setHudText(`${header}\n${details}`);
 
   // finally render
   orbit.update();

@@ -141,135 +141,193 @@ function handleController(controller) {
   }
 }
 
-// ===== World-space HUD (head-locked) + Input Map =====
+// ====== CONFIG ======
+const HUD_CFG = {
+  WIDTH_PX: 1024,
+  HEIGHT_PX: 512,
+  PADDING: 18,
+  FONT_BODY: '26px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  FONT_HDR: 'bold 30px system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+  LINE_H: 32,
+  PLANE_W_M: 0.8,       // ~80 cm wide
+  MIN_PLANE_H_M: 0.30,  // min height so it never collapses
+  BG: 'rgba(0,0,0,0.55)',
+  FG: '#ffffff'
+};
 
-// High-level flags for WebXR actions
+// ====== Input state & helpers ======
 const activeFlags = { selectL:false, selectR:false, squeezeL:false, squeezeR:false };
 function labelFrom(src) { return (src.handedness || 'none')[0].toUpperCase(); } // L/R/N
 
-// XR reference space for joint poses
 let xrRefSpace = null;
 
-// Build a head-locked HUD (plane) that we draw text onto
+const PINCH_THRESHOLD_METERS = 0.018;
+const ff = (x, d=2) => (x!==undefined && x!==null) ? x.toFixed(d) : '—';
+
+// Produce **clean** lines for the HUD
+function formatInputs(session, frame, refSpace) {
+  const lines = [];
+  for (const src of session.inputSources) {
+    const hand = (src.handedness || 'none')[0].toUpperCase(); // L/R/N
+    const type = src.hand ? 'hand' : (src.gamepad ? 'ctrl' : (src.targetRayMode || 'dev'));
+
+    // Base label
+    let label = `[${hand}] ${type}`;
+
+    // Buttons / axes (controllers)
+    if (src.gamepad) {
+      const pressed = src.gamepad.buttons.map((b,i)=> b.pressed ? `B${i}` : null).filter(Boolean);
+      // Keep it short: show up to 4 buttons; then +
+      const btnLbl = pressed.length ? (pressed.length > 4 ? pressed.slice(0,4).join(',') + ` +${pressed.length-4}` : pressed.join(',')) : '—';
+      const axes   = src.gamepad.axes.map(a=>ff(a,2));
+      const axesLbl = axes.length ? (axes.length > 2 ? `${axes[0]},${axes[1]}…` : axes.join(',')) : '—';
+      label += ` | btn:${btnLbl} | ax:${axesLbl}`;
+    }
+
+    // Hand pinch (AVP)
+    if (src.hand && frame && refSpace) {
+      const ht = src.hand;
+      const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand!=='undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
+      const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand!=='undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
+      const pI = tipIndex ? frame.getJointPose(tipIndex, refSpace) : null;
+      const pT = tipThumb ? frame.getJointPose(tipThumb, refSpace) : null;
+      if (pI && pT) {
+        const dx = pI.transform.position.x - pT.transform.position.x;
+        const dy = pI.transform.position.y - pT.transform.position.y;
+        const dz = pI.transform.position.z - pT.transform.position.z;
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        const pinching = dist < PINCH_THRESHOLD_METERS;
+        label += ` | pinch:${ff(dist,3)}m${pinching ? ' ✓' : ''}`;
+      } else {
+        label += ` | pinch: n/a`;
+      }
+    }
+
+    // Target ray (kept concise)
+    if (src.targetRayMode) label += ` | ray:${src.targetRayMode}`;
+
+    lines.push(label);
+  }
+  return lines;
+}
+
+// ====== World-space HUD (canvas -> plane) ======
 let hudCanvas, hudCtx, hudTexture, hudMesh;
+
 function ensureWorldHud() {
   if (hudMesh) return;
 
-  // hi-res canvas for crisp text
   hudCanvas = document.createElement('canvas');
-  hudCanvas.width = 1024;   // increase for sharper text (costs a bit of perf)
-  hudCanvas.height = 512;
+  hudCanvas.width  = HUD_CFG.WIDTH_PX;
+  hudCanvas.height = HUD_CFG.HEIGHT_PX;
   hudCtx = hudCanvas.getContext('2d');
 
   hudTexture = new THREE.CanvasTexture(hudCanvas);
   hudTexture.colorSpace = THREE.SRGBColorSpace;
 
   const mat = new THREE.MeshBasicMaterial({
-    map: hudTexture,
-    transparent: true,
-    depthTest: false,   // always on top
-    depthWrite: false
+    map: hudTexture, transparent: true, depthTest: false, depthWrite: false
   });
 
-  // ~90cm wide, 45cm tall panel in front of the eyes
-  const geo = new THREE.PlaneGeometry(0.9, 0.45);
+  const aspect = HUD_CFG.HEIGHT_PX / HUD_CFG.WIDTH_PX;       // 0.5 by default
+  const planeH = Math.max(HUD_CFG.PLANE_W_M * aspect, HUD_CFG.MIN_PLANE_H_M);
+  const geo = new THREE.PlaneGeometry(HUD_CFG.PLANE_W_M, planeH);
+
   hudMesh = new THREE.Mesh(geo, mat);
   hudMesh.renderOrder = 9999;
-  hudMesh.position.set(0, -0.06, -0.85); // centered, a little below gaze
+  hudMesh.position.set(0, -0.06, -0.85); // center, slightly below gaze
   camera.add(hudMesh);
   scene.add(camera);
 }
 
-function drawHud(text) {
-  if (!hudCanvas) return;
+// Text wrapping + drawing
+function wrapLines(str, maxWidth) {
+  const words = String(str).split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    const wPx = hudCtx.measureText(test).width;
+    if (wPx > maxWidth && line) { lines.push(line); line = w; }
+    else { line = test; }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function drawHud(header, bodyLines) {
+  const P = HUD_CFG.PADDING;
   const W = hudCanvas.width, H = hudCanvas.height;
+  const usableW = W - P*2;
 
   hudCtx.clearRect(0, 0, W, H);
-  // background panel
-  hudCtx.fillStyle = 'rgba(0,0,0,0.55)';
+  hudCtx.fillStyle = HUD_CFG.BG;
   hudCtx.fillRect(0, 0, W, H);
 
-  // text
-  hudCtx.fillStyle = '#ffffff';
-  hudCtx.font = '28px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+  // Header
+  hudCtx.fillStyle = HUD_CFG.FG;
+  hudCtx.font = HUD_CFG.FONT_HDR;
   hudCtx.textBaseline = 'top';
+  let y = P;
+  hudCtx.fillText(header, P, y);
+  y += 36;
 
-  const lines = String(text).split('\n');
-  const lineH = 34;
-  let y = 16;
-  for (const line of lines) { hudCtx.fillText(line, 16, y); y += lineH; }
+  // Divider
+  hudCtx.fillRect(P, y, usableW, 2);
+  y += 10;
+
+  // Body
+  hudCtx.font = HUD_CFG.FONT_BODY;
+
+  // Wrap each line; clip if overflows; show “+N more”
+  const maxLines = Math.floor((H - y - P) / HUD_CFG.LINE_H);
+  let used = 0, hiddenCount = 0;
+
+  for (const raw of bodyLines) {
+    const wrapped = wrapLines(raw, usableW);
+    for (const l of wrapped) {
+      if (used < maxLines) {
+        hudCtx.fillText(l, P, y);
+        y += HUD_CFG.LINE_H;
+        used++;
+      } else {
+        hiddenCount++;
+      }
+    }
+  }
+  if (hiddenCount > 0) {
+    const ellip = `… +${hiddenCount} more`;
+    hudCtx.fillText(ellip, P, H - P - HUD_CFG.LINE_H);
+  }
+
+  // Auto-scale plane height to used content (minimum preserved)
+  const usedHeightPx = Math.max(y + P, HUD_CFG.HEIGHT_PX * (HUD_CFG.MIN_PLANE_H_M / (HUD_CFG.PLANE_W_M * (HUD_CFG.HEIGHT_PX/HUD_CFG.WIDTH_PX))));
+  const scaleY = usedHeightPx / HUD_CFG.HEIGHT_PX;
+  hudMesh.scale.y = scaleY;
 
   hudTexture.needsUpdate = true;
 }
 
-function setHudText(text) { drawHud(text); }
-
-// ——— Input inspection helpers ———
-const PINCH_THRESHOLD_METERS = 0.018; // ~1.8cm: good default for AVP
-function ff(x, d=2) { return (x!==undefined && x!==null) ? x.toFixed(d) : '—'; }
-
-function snapshotInputs(session, frame, referenceSpace) {
-  const lines = [];
-  for (const src of session.inputSources) {
-    const kind = src.hand ? 'hand' : (src.gamepad ? 'gamepad' : (src.targetRayMode || 'unknown'));
-    const hand = src.handedness || 'none';
-    const prof = (src.profiles && src.profiles.length) ? src.profiles.join(',') : '—';
-
-    // Controllers (Gamepad API)
-    let ctrlInfo = '';
-    if (src.gamepad) {
-      const pressed = src.gamepad.buttons.map((b,i)=> b.pressed ? `B${i}` : null).filter(Boolean).join(' ');
-      const axes = src.gamepad.axes.map(a=>ff(a,2)).join(', ');
-      ctrlInfo = ` | buttons: ${pressed || 'none'} | axes: [${axes}]`;
-    }
-
-    // Hands (joint-based pinch detector)
-    let pinchInfo = '';
-    if (src.hand && frame && referenceSpace) {
-      // Cross-impl: try WebXR Hand Input names first, then XRHand indices if exposed
-      const ht = src.hand;
-      const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand !== 'undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
-      const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand !== 'undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
-
-      const pIndex = tipIndex ? frame.getJointPose(tipIndex, referenceSpace) : null;
-      const pThumb = tipThumb ? frame.getJointPose(tipThumb, referenceSpace) : null;
-
-      if (pIndex && pThumb) {
-        const dx = pIndex.transform.position.x - pThumb.transform.position.x;
-        const dy = pIndex.transform.position.y - pThumb.transform.position.y;
-        const dz = pIndex.transform.position.z - pThumb.transform.position.z;
-        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        const isPinching = dist < PINCH_THRESHOLD_METERS;
-        pinchInfo = ` | pinchDist: ${ff(dist,3)}m ${isPinching ? '→ PINCH' : ''}`;
-      } else {
-        pinchInfo = ' | pinch: n/a';
-      }
-    }
-
-    lines.push(`[${hand}] ${kind} | targetRay: ${src.targetRayMode || '—'} | profiles: ${prof}${ctrlInfo}${pinchInfo}`);
-  }
-  return lines.length ? lines.join('\n') : 'No inputSources (hands/controllers not detected).';
-}
-
-// Bind XR events
+// Bind XR events (request ref space + action flags)
 renderer.xr.addEventListener('sessionstart', async () => {
   const session = renderer.xr.getSession();
   xrRefSpace = await session.requestReferenceSpace('local-floor');
   ensureWorldHud();
 
-  // High-level action flags from WebXR events (controllers & hand-select)
   session.addEventListener('selectstart',  (e)=> activeFlags['select'+labelFrom(e.inputSource)] = true);
   session.addEventListener('selectend',    (e)=> activeFlags['select'+labelFrom(e.inputSource)] = false);
   session.addEventListener('squeezestart', (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = true);
   session.addEventListener('squeezeend',   (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = false);
 
-  setHudText('XR Input: session started…');
+  drawHud('XR Input: session started…', []);
 });
 
 renderer.xr.addEventListener('sessionend', () => {
   xrRefSpace = null;
-  setHudText('XR Input: session ended');
+  ensureWorldHud();
+  drawHud('XR Input: session ended', []);
 });
+
 
 
 // --- Animate ---
@@ -280,17 +338,18 @@ renderer.setAnimationLoop((t, frame) => {
   handleController(controller1);
   handleController(controller2);
 
-  // Build the HUD text
+  // Header: compact booleans for actions
   const header =
-    `select[L:${!!activeFlags.selectL} R:${!!activeFlags.selectR}]  ` +
-    `squeeze[L:${!!activeFlags.squeezeL} R:${!!activeFlags.squeezeR}]`;
+    `XR Inputs  ` +
+    `SEL[L:${+!!activeFlags.selectL} R:${+!!activeFlags.selectR}]  ` +
+    `SQZ[L:${+!!activeFlags.squeezeL} R:${+!!activeFlags.squeezeR}]`;
 
+  // Lines per input source, wrapped later
   const session = renderer.xr.getSession?.();
-  const details = (session && xrRefSpace)
-    ? snapshotInputs(session, frame, xrRefSpace)
-    : 'XR session not active.';
+  const bodyLines = (session && xrRefSpace) ? formatInputs(session, frame, xrRefSpace)
+                                            : ['XR session not active.'];
 
-  setHudText(`${header}\n${details}`);
+  drawHud(header, bodyLines);
 
   orbit.update();
   renderer.render(scene, camera);

@@ -188,7 +188,7 @@ sliderPanel.add(sliderKnob);
 
 // Local placement relative to wrist (tweak to taste)
 sliderPanel.position.set(0.07, 0.00, -0.06);  // a bit to the outside and forward
-sliderPanel.rotation.set(0.25, 0, 0);        // slight tilt toward the eyes
+sliderPanel.rotation.set(5, 0, 0);        // slight tilt toward the eyes
 
 // Helpers to map value <-> X along the track
 const valueToX = (v) => THREE.MathUtils.mapLinear(v, SLIDER_MIN, SLIDER_MAX, -TRACK_LEN_M/2, TRACK_LEN_M/2);

@@ -280,17 +280,17 @@ renderer.setAnimationLoop((t) => {
   const dt = t * 0.001;
   box.rotation.y = dt * 0.7;
 
-  // Build a one-line summary header
+  handleController(controller1);
+  handleController(controller2);
+
+  // Build HUD text
   const header = `select[L:${!!activeFlags.selectL} R:${!!activeFlags.selectR}]  ` +
                  `squeeze[L:${!!activeFlags.squeezeL} R:${!!activeFlags.squeezeR}]`;
-
-  // Snapshot all inputs
   const session = renderer.xr.getSession?.();
   const details = (session && xrRefSpace)
     ? snapshotInputs(session, frame, xrRefSpace)
     : 'XR session not active.';
 
-//   hud.textContent = `${header}\n${details}`;
   setHudText(`${header}\n${details}`);
 
   // finally render

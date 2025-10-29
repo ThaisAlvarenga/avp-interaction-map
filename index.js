@@ -218,6 +218,16 @@ function updateRightHandSource(session) {
   }
 }
 
+// Find a specific hand every frame (robust on AVP/Quest)
+function findHand(session, handedness) {
+  if (!session) return null;
+  for (const src of session.inputSources) {
+    if (src.hand && src.handedness === handedness) return src;
+  }
+  return null;
+}
+
+
 renderer.xr.addEventListener('sessionstart', async () => {
   const session = renderer.xr.getSession();
   try { xrRefSpace_local = await session.requestReferenceSpace('local-floor'); } catch {}
@@ -266,10 +276,17 @@ function updateSliderPose(frame) {
 
 // Pinch-drag interaction (hands only)
 function updateSliderInteraction(frame) {
-  // right hand must exist, and we need a ref space
-  if (!rightHandSource || !rightHandSource.hand || !xrRefSpace_local) return;
+  if (!xrRefSpace_local) return;
 
-  const ht = rightHandSource.hand;
+  const session = renderer.xr.getSession?.();
+  if (!session) return;
+
+  // Always try to use the current RIGHT hand from session each frame.
+  // Fallback to cached rightHandSource if needed.
+  const rhs = findHand(session, 'right') || rightHandSource;
+  if (!rhs || !rhs.hand) return;
+
+  const ht = rhs.hand;
   const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand!=='undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
   const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand!=='undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
   if (!tipIndex || !tipThumb) return;
@@ -278,7 +295,7 @@ function updateSliderInteraction(frame) {
   const pT = frame.getJointPose(tipThumb, xrRefSpace_local);
   if (!pI || !pT) return;
 
-  // detect pinch on RIGHT hand
+  // detect pinch on RIGHT hand only
   const dx = pI.transform.position.x - pT.transform.position.x;
   const dy = pI.transform.position.y - pT.transform.position.y;
   const dz = pI.transform.position.z - pT.transform.position.z;
@@ -300,7 +317,10 @@ function updateSliderInteraction(frame) {
 
   // move knob (smoothed)
   sliderKnob.position.x = THREE.MathUtils.lerp(sliderKnob.position.x, clampedX, 0.35);
+
+
 }
+
 
 
 // Accessor you can use elsewhere

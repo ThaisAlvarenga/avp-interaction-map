@@ -58,6 +58,8 @@ dir.castShadow = true;
 // add setup shadow properties for the light
 scene.add(dir);
 
+
+
 // --- Floor ---
 // large plane as floor
 const floor = new THREE.Mesh(
@@ -70,6 +72,8 @@ floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 // allow floor to receive shadows
 scene.add(floor);
+
+
 
 // --- Box ---
 const box = new THREE.Mesh(
@@ -84,12 +88,16 @@ box.castShadow = true;
 // add box to the scene
 scene.add(box);
 
+
+
 // --- Resize ---
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+
 
 // --- Controller setup ---
 const tempMatrix = new THREE.Matrix4();
@@ -141,58 +149,60 @@ function handleController(controller) {
   }
 }
 
-
-
-// ================== LEFT-WRIST SLIDER ==================
+// ================== LEFT-WRIST SLIDER (WORLD-SPACE) ==================
 const SLIDER_MIN = -1.4;
 const SLIDER_MAX =  0.4;
-const TRACK_LEN_M = 0.18;           // 18 cm track
-const PINCH_THRESHOLD = 0.018;      // ~1.8 cm
+const TRACK_LEN_M = 0.18;        // 18 cm
+const PINCH_THRESHOLD = 0.018;   // ~1.8 cm
 
-let leftHandSource = null;
 let sliderValue = 0.0;
+let leftHandSource = null;
 
-// 3D widgets
-const sliderRoot = new THREE.Object3D();   // follows wrist pose
-const sliderPanel = new THREE.Object3D();  // local offset/orientation
+// Scene objects
+const sliderRoot  = new THREE.Object3D(); // follows wrist or controller
+const sliderPanel = new THREE.Object3D(); // local UI
+scene.add(sliderRoot);
+sliderRoot.add(sliderPanel);
+
+// Backing panel (simple plane so we don't rely on non-core geometries)
+const sliderBg = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.22, 0.10),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.45 })
+);
+sliderBg.position.set(0, 0, -0.001);
+sliderPanel.add(sliderBg);
+
+// Track + knob
 const sliderTrack = new THREE.Mesh(
   new THREE.PlaneGeometry(TRACK_LEN_M, 0.02),
-  new THREE.MeshBasicMaterial({ color: 0x222222, transparent:true, opacity:0.8 })
+  new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.85 })
 );
 const sliderKnob = new THREE.Mesh(
   new THREE.CircleGeometry(0.015, 32),
   new THREE.MeshBasicMaterial({ color: 0xffcc66 })
 );
-const sliderBg = new THREE.Mesh(
-  new THREE.RoundedRectangleGeometry?.(0.22, 0.1, 0.02, 4) // Three r165 has RoundedRectangleGeometry
-  || new THREE.PlaneGeometry(0.22, 0.10),                  // fallback if geometry helper missing
-  new THREE.MeshBasicMaterial({ color: 0x000000, transparent:true, opacity:0.45 })
-);
-
-// build hierarchy
-sliderBg.position.set(0, 0, -0.001);
-sliderPanel.add(sliderBg);
+sliderKnob.position.z = 0.001;
 sliderPanel.add(sliderTrack);
 sliderPanel.add(sliderKnob);
-sliderRoot.add(sliderPanel);
-scene.add(sliderRoot);
 
-// panel local placement (relative to wrist)
-sliderPanel.position.set(0.07, 0.00, -0.06);          // to the outside and a bit forward
-sliderPanel.rotation.set(-0.15, 0, 0);                // slight tilt toward user
+// Local placement relative to wrist (tweak to taste)
+sliderPanel.position.set(0.07, 0.00, -0.06);  // a bit to the outside and forward
+sliderPanel.rotation.set(-0.15, 0, 0);        // slight tilt toward the eyes
 
-// helpers
+// Helpers to map value <-> X along the track
 const valueToX = (v) => THREE.MathUtils.mapLinear(v, SLIDER_MIN, SLIDER_MAX, -TRACK_LEN_M/2, TRACK_LEN_M/2);
 const xToValue = (x) => THREE.MathUtils.clamp(
   THREE.MathUtils.mapLinear(x, -TRACK_LEN_M/2, TRACK_LEN_M/2, SLIDER_MIN, SLIDER_MAX),
   SLIDER_MIN, SLIDER_MAX
 );
 
-// set initial knob position
+// Initial knob position
 sliderKnob.position.x = valueToX(sliderValue);
-sliderKnob.position.z = 0.001;
 
-// ——— Hand discovery & lifecycle ———
+// XR ref space from your HUD block or create our own handle
+let xrRefSpace_local = null;
+
+// Discover left hand source when session starts / inputs change
 function updateLeftHandSource(session) {
   leftHandSource = null;
   for (const src of session.inputSources) {
@@ -200,52 +210,71 @@ function updateLeftHandSource(session) {
   }
 }
 
-renderer.xr.addEventListener('sessionstart', () => {
+renderer.xr.addEventListener('sessionstart', async () => {
   const session = renderer.xr.getSession();
+  // Prefer an existing ref space if you already made one, else request:
+  try { xrRefSpace_local = await session.requestReferenceSpace('local-floor'); } catch {}
   updateLeftHandSource(session);
   session.addEventListener('inputsourceschange', () => updateLeftHandSource(session));
 });
 
-// ——— Per-frame: pose the slider on the wrist ———
+// Pose sliderRoot at left wrist (or left controller grip if no hands)
+const _tmpObj = new THREE.Object3D();
 function updateSliderPose(frame) {
-  if (!leftHandSource || !leftHandSource.hand || !xrRefSpace) return;
+  const session = renderer.xr.getSession?.();
+  if (!session) return;
 
-  const ht = leftHandSource.hand;
-  const wristJoint = ht.get?.('wrist') || (typeof XRHand!=='undefined' && ht[XRHand.WRIST]);
-  if (!wristJoint) return;
+  // 1) Prefer hand wrist
+  if (leftHandSource && leftHandSource.hand && xrRefSpace_local) {
+    const ht = leftHandSource.hand;
+    const wristJoint = ht.get?.('wrist') || (typeof XRHand!=='undefined' && ht[XRHand.WRIST]);
+    if (wristJoint) {
+      const pose = frame.getJointPose(wristJoint, xrRefSpace_local);
+      if (pose) {
+        const { position, orientation } = pose.transform;
+        sliderRoot.position.set(position.x, position.y, position.z);
+        sliderRoot.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
+        sliderRoot.visible = true;
+        return;
+      }
+    }
+  }
 
-  const wristPose = frame.getJointPose(wristJoint, xrRefSpace);
-  if (!wristPose) return;
+  // 2) Fallback: left controller grip (Quest)
+  const grip = renderer.xr.getControllerGrip?.(0); // index 0 is usually left
+  if (grip) {
+    _tmpObj.matrix.copy(grip.matrixWorld);
+    _tmpObj.matrix.decompose(sliderRoot.position, sliderRoot.quaternion, sliderRoot.scale);
+    sliderRoot.visible = true;
+    return;
+  }
 
-  // place sliderRoot at wrist pose
-  const { position, orientation } = wristPose.transform;
-  sliderRoot.position.set(position.x, position.y, position.z);
-  sliderRoot.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
+  // If nothing detected, hide
+  sliderRoot.visible = false;
 }
 
-// ——— Per-frame: pinch-drag to set value ———
+// Pinch-drag interaction (hands only)
 function updateSliderInteraction(frame) {
-  if (!leftHandSource || !leftHandSource.hand || !xrRefSpace) return;
+  if (!leftHandSource || !leftHandSource.hand || !xrRefSpace_local) return;
 
   const ht = leftHandSource.hand;
   const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand!=='undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
   const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand!=='undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
   if (!tipIndex || !tipThumb) return;
 
-  const pI = frame.getJointPose(tipIndex, xrRefSpace);
-  const pT = frame.getJointPose(tipThumb, xrRefSpace);
+  const pI = frame.getJointPose(tipIndex, xrRefSpace_local);
+  const pT = frame.getJointPose(tipThumb, xrRefSpace_local);
   if (!pI || !pT) return;
 
-  // detect pinch
+  // pinch detect
   const dx = pI.transform.position.x - pT.transform.position.x;
   const dy = pI.transform.position.y - pT.transform.position.y;
   const dz = pI.transform.position.z - pT.transform.position.z;
   const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
   const pinching = dist < PINCH_THRESHOLD;
-
   if (!pinching) return;
 
-  // convert index tip world position into sliderPanel local space
+  // project index tip into sliderPanel local space
   const idxWorld = new THREE.Vector3(
     pI.transform.position.x,
     pI.transform.position.y,
@@ -253,19 +282,18 @@ function updateSliderInteraction(frame) {
   );
   const local = sliderPanel.worldToLocal(idxWorld.clone());
 
-  // use X along the track to compute value
+  // clamp to track and set new value
   const clampedX = THREE.MathUtils.clamp(local.x, -TRACK_LEN_M/2, TRACK_LEN_M/2);
   sliderValue = xToValue(clampedX);
 
-  // move knob
+  // move knob (smoothed)
   sliderKnob.position.x = THREE.MathUtils.lerp(sliderKnob.position.x, clampedX, 0.35);
 
-  // OPTIONAL: visual fill (left side)
-  // you can add a small bar or change track color based on value, e.g.:
-  // sliderTrack.material.color.setHSL(THREE.MathUtils.mapLinear(sliderValue, SLIDER_MIN, SLIDER_MAX, 0.0, 0.33), 0.6, 0.6);
+  // optional color feedback
+  // sliderTrack.material.color.setHSL(THREE.MathUtils.mapLinear(sliderValue, SLIDER_MIN, SLIDER_MAX, 0.0, 0.33), 0.6, 0.55);
 }
 
-// expose for your own app logic (e.g., control shader/voltage)
+// Accessor you can use elsewhere
 function getSliderValue() { return sliderValue; }
 
 
@@ -468,8 +496,7 @@ renderer.setAnimationLoop((t, frame) => {
 
   handleController(controller1);
   handleController(controller2);
-
-  // NEW: update slider
+   // Slider updates
   updateSliderPose(frame);
   updateSliderInteraction(frame);
 

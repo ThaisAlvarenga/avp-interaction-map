@@ -141,6 +141,137 @@ function handleController(controller) {
   }
 }
 
+
+
+// ================== LEFT-WRIST SLIDER ==================
+const SLIDER_MIN = -1.4;
+const SLIDER_MAX =  0.4;
+const TRACK_LEN_M = 0.18;           // 18 cm track
+const PINCH_THRESHOLD = 0.018;      // ~1.8 cm
+
+let leftHandSource = null;
+let sliderValue = 0.0;
+
+// 3D widgets
+const sliderRoot = new THREE.Object3D();   // follows wrist pose
+const sliderPanel = new THREE.Object3D();  // local offset/orientation
+const sliderTrack = new THREE.Mesh(
+  new THREE.PlaneGeometry(TRACK_LEN_M, 0.02),
+  new THREE.MeshBasicMaterial({ color: 0x222222, transparent:true, opacity:0.8 })
+);
+const sliderKnob = new THREE.Mesh(
+  new THREE.CircleGeometry(0.015, 32),
+  new THREE.MeshBasicMaterial({ color: 0xffcc66 })
+);
+const sliderBg = new THREE.Mesh(
+  new THREE.RoundedRectangleGeometry?.(0.22, 0.1, 0.02, 4) // Three r165 has RoundedRectangleGeometry
+  || new THREE.PlaneGeometry(0.22, 0.10),                  // fallback if geometry helper missing
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent:true, opacity:0.45 })
+);
+
+// build hierarchy
+sliderBg.position.set(0, 0, -0.001);
+sliderPanel.add(sliderBg);
+sliderPanel.add(sliderTrack);
+sliderPanel.add(sliderKnob);
+sliderRoot.add(sliderPanel);
+scene.add(sliderRoot);
+
+// panel local placement (relative to wrist)
+sliderPanel.position.set(0.07, 0.00, -0.06);          // to the outside and a bit forward
+sliderPanel.rotation.set(-0.15, 0, 0);                // slight tilt toward user
+
+// helpers
+const valueToX = (v) => THREE.MathUtils.mapLinear(v, SLIDER_MIN, SLIDER_MAX, -TRACK_LEN_M/2, TRACK_LEN_M/2);
+const xToValue = (x) => THREE.MathUtils.clamp(
+  THREE.MathUtils.mapLinear(x, -TRACK_LEN_M/2, TRACK_LEN_M/2, SLIDER_MIN, SLIDER_MAX),
+  SLIDER_MIN, SLIDER_MAX
+);
+
+// set initial knob position
+sliderKnob.position.x = valueToX(sliderValue);
+sliderKnob.position.z = 0.001;
+
+// ——— Hand discovery & lifecycle ———
+function updateLeftHandSource(session) {
+  leftHandSource = null;
+  for (const src of session.inputSources) {
+    if (src.handedness === 'left' && src.hand) { leftHandSource = src; break; }
+  }
+}
+
+renderer.xr.addEventListener('sessionstart', () => {
+  const session = renderer.xr.getSession();
+  updateLeftHandSource(session);
+  session.addEventListener('inputsourceschange', () => updateLeftHandSource(session));
+});
+
+// ——— Per-frame: pose the slider on the wrist ———
+function updateSliderPose(frame) {
+  if (!leftHandSource || !leftHandSource.hand || !xrRefSpace) return;
+
+  const ht = leftHandSource.hand;
+  const wristJoint = ht.get?.('wrist') || (typeof XRHand!=='undefined' && ht[XRHand.WRIST]);
+  if (!wristJoint) return;
+
+  const wristPose = frame.getJointPose(wristJoint, xrRefSpace);
+  if (!wristPose) return;
+
+  // place sliderRoot at wrist pose
+  const { position, orientation } = wristPose.transform;
+  sliderRoot.position.set(position.x, position.y, position.z);
+  sliderRoot.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
+}
+
+// ——— Per-frame: pinch-drag to set value ———
+function updateSliderInteraction(frame) {
+  if (!leftHandSource || !leftHandSource.hand || !xrRefSpace) return;
+
+  const ht = leftHandSource.hand;
+  const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand!=='undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
+  const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand!=='undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
+  if (!tipIndex || !tipThumb) return;
+
+  const pI = frame.getJointPose(tipIndex, xrRefSpace);
+  const pT = frame.getJointPose(tipThumb, xrRefSpace);
+  if (!pI || !pT) return;
+
+  // detect pinch
+  const dx = pI.transform.position.x - pT.transform.position.x;
+  const dy = pI.transform.position.y - pT.transform.position.y;
+  const dz = pI.transform.position.z - pT.transform.position.z;
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  const pinching = dist < PINCH_THRESHOLD;
+
+  if (!pinching) return;
+
+  // convert index tip world position into sliderPanel local space
+  const idxWorld = new THREE.Vector3(
+    pI.transform.position.x,
+    pI.transform.position.y,
+    pI.transform.position.z
+  );
+  const local = sliderPanel.worldToLocal(idxWorld.clone());
+
+  // use X along the track to compute value
+  const clampedX = THREE.MathUtils.clamp(local.x, -TRACK_LEN_M/2, TRACK_LEN_M/2);
+  sliderValue = xToValue(clampedX);
+
+  // move knob
+  sliderKnob.position.x = THREE.MathUtils.lerp(sliderKnob.position.x, clampedX, 0.35);
+
+  // OPTIONAL: visual fill (left side)
+  // you can add a small bar or change track color based on value, e.g.:
+  // sliderTrack.material.color.setHSL(THREE.MathUtils.mapLinear(sliderValue, SLIDER_MIN, SLIDER_MAX, 0.0, 0.33), 0.6, 0.6);
+}
+
+// expose for your own app logic (e.g., control shader/voltage)
+function getSliderValue() { return sliderValue; }
+
+
+
+
+
 // ====== CONFIG ======
 const HUD_CFG = {
   WIDTH_PX: 1024,
@@ -337,6 +468,10 @@ renderer.setAnimationLoop((t, frame) => {
 
   handleController(controller1);
   handleController(controller2);
+
+  // NEW: update slider
+  updateSliderPose(frame);
+  updateSliderInteraction(frame);
 
   // Header: compact booleans for actions
   const header =

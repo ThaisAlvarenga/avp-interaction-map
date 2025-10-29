@@ -211,6 +211,25 @@ const xToValue = (x) => THREE.MathUtils.clamp(
 sliderKnob.position.x = valueToX(sliderValue);
 
 
+// --- DEBUG AXES: make it big, in-front, and ignore depth so it's visible in XR ---
+const axes = new THREE.AxesHelper(0.25);   // 25 cm — actually visible in-headset
+axes.position.set(0, 0, 0.03);             // nudge forward so it’s not coplanar
+axes.renderOrder = 9999;
+
+// AxesHelper is a LineSegments; tweak its material so it draws on top
+if (axes.material) {
+  axes.material.depthTest = false;
+  axes.material.depthWrite = false;
+  axes.material.transparent = true;
+  axes.material.opacity = 1.0;
+}
+
+// Attach near the UI so you can see it with the slider
+sliderPanel.add(axes);
+// (You can also try sliderTilt.add(axes) — but sliderPanel keeps it right by the UI.)
+
+
+
 // VOLTAGE LABEL (canvas-based text)
 // Voltage label (canvas-based text)
 const voltageCanvas = document.createElement('canvas');
@@ -583,8 +602,6 @@ renderer.xr.addEventListener('sessionend', () => {
   drawHud('XR Input: session ended', []);
 });
 
-
-sliderTilt.add(new THREE.AxesHelper(0.05)); // Red=X (tilt axis), Green=Y, Blue=Z
 
 
 // --- Animate ---

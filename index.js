@@ -160,10 +160,14 @@ let leftHandSource = null;
 let rightHandSource = null;
 
 // Scene objects
-const sliderRoot  = new THREE.Object3D(); // follows wrist or controller
-const sliderPanel = new THREE.Object3D(); // local UI
+// Scene objects
+const sliderRoot  = new THREE.Object3D(); // follows wrist or controller (pose applied here)
+const sliderTilt  = new THREE.Object3D(); // holds ONLY the tilt angle
+const sliderPanel = new THREE.Object3D(); // actual UI (track, knob, label)
+
 scene.add(sliderRoot);
-sliderRoot.add(sliderPanel);
+sliderRoot.add(sliderTilt);
+sliderTilt.add(sliderPanel);
 
 // Backing panel (simple plane so we don't rely on non-core geometries)
 const sliderBg = new THREE.Mesh(
@@ -188,7 +192,13 @@ sliderPanel.add(sliderKnob);
 
 // Local placement relative to wrist (tweak to taste)
 sliderPanel.position.set(0.07, 0.00, -0.06);  // a bit to the outside and forward
-sliderPanel.rotation.set(5, 0, 0);        // slight tilt toward the eyes
+
+
+sliderPanel.position.set(0.07, 0.02, -0.05); // a bit higher/closer than before
+
+// Tilt UP by ~20 degrees around local X on the middle node (in radians)
+const PANEL_TILT_X = THREE.MathUtils.degToRad(20);
+sliderTilt.rotation.set(PANEL_TILT_X, 0, 0);
 
 // Helpers to map value <-> X along the track
 const valueToX = (v) => THREE.MathUtils.mapLinear(v, SLIDER_MIN, SLIDER_MAX, -TRACK_LEN_M/2, TRACK_LEN_M/2);
@@ -574,6 +584,8 @@ renderer.xr.addEventListener('sessionend', () => {
 });
 
 
+sliderTilt.add(new THREE.AxesHelper(0.05)); // Red=X (tilt axis), Green=Y, Blue=Z
+
 
 // --- Animate ---
 renderer.setAnimationLoop((t, frame) => {
@@ -584,10 +596,15 @@ renderer.setAnimationLoop((t, frame) => {
   handleController(controller2);
    // Slider updates
   updateSliderPose(frame);
-  updateSliderInteraction(frame);
 
-    // keep the text refreshed (shows even before first pinch)
+    // Ensure the tilt stays applied no matter what
+  sliderTilt.rotation.x = PANEL_TILT_X;
+
+  updateSliderInteraction(frame);
+   // keep the text refreshed (shows even before first pinch)
   updateVoltageLabel(sliderValue);
+
+
 
   // Header: compact booleans for actions
   const header =
@@ -605,3 +622,8 @@ renderer.setAnimationLoop((t, frame) => {
   orbit.update();
   renderer.render(scene, camera);
 });
+
+
+
+
+

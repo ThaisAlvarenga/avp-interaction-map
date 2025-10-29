@@ -1,0 +1,17 @@
+html, body { 
+    margin:0; 
+    height:100%; 
+    overflow:hidden; 
+    background:#111; 
+}
+
+#info { 
+    position:fixed; 
+    top:12px; left:12px; 
+    color:#ddd; 
+    font:14px/1.4 system-ui; 
+}
+
+canvas { 
+    display:block; 
+}

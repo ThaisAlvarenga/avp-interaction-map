@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AVP Interaction Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="index.css" />
+  <script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="info" style="position:fixed;top:12px;left:12px;">Move your head; press the button to enter VR.</div>
+
+  <!-- Load your module AFTER the DOM and without a duplicate non-module include -->
+  <script type="module" src="./index.js"></script>
+
+  <!-- dat.gui  -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
+</body>
+</html>

@@ -157,6 +157,7 @@ const PINCH_THRESHOLD = 0.018;   // ~1.8 cm
 
 let sliderValue = 0.0;
 let leftHandSource = null;
+let rightHandSource = null;
 
 // Scene objects
 const sliderRoot  = new THREE.Object3D(); // follows wrist or controller
@@ -210,12 +211,22 @@ function updateLeftHandSource(session) {
   }
 }
 
+function updateRightHandSource(session) {
+  rightHandSource = null;
+  for (const src of session.inputSources) {
+    if (src.handedness === 'right' && src.hand) { rightHandSource = src; break; }
+  }
+}
+
 renderer.xr.addEventListener('sessionstart', async () => {
   const session = renderer.xr.getSession();
-  // Prefer an existing ref space if you already made one, else request:
   try { xrRefSpace_local = await session.requestReferenceSpace('local-floor'); } catch {}
-  updateLeftHandSource(session);
-  session.addEventListener('inputsourceschange', () => updateLeftHandSource(session));
+  updateLeftHandSource(session);   // left = mount pose
+  updateRightHandSource(session);  // right = interaction hand
+  session.addEventListener('inputsourceschange', () => {
+    updateLeftHandSource(session);
+    updateRightHandSource(session);
+  });
 });
 
 // Pose sliderRoot at left wrist (or left controller grip if no hands)
@@ -255,9 +266,10 @@ function updateSliderPose(frame) {
 
 // Pinch-drag interaction (hands only)
 function updateSliderInteraction(frame) {
-  if (!leftHandSource || !leftHandSource.hand || !xrRefSpace_local) return;
+  // right hand must exist, and we need a ref space
+  if (!rightHandSource || !rightHandSource.hand || !xrRefSpace_local) return;
 
-  const ht = leftHandSource.hand;
+  const ht = rightHandSource.hand;
   const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand!=='undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
   const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand!=='undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
   if (!tipIndex || !tipThumb) return;
@@ -266,7 +278,7 @@ function updateSliderInteraction(frame) {
   const pT = frame.getJointPose(tipThumb, xrRefSpace_local);
   if (!pI || !pT) return;
 
-  // pinch detect
+  // detect pinch on RIGHT hand
   const dx = pI.transform.position.x - pT.transform.position.x;
   const dy = pI.transform.position.y - pT.transform.position.y;
   const dz = pI.transform.position.z - pT.transform.position.z;
@@ -274,7 +286,7 @@ function updateSliderInteraction(frame) {
   const pinching = dist < PINCH_THRESHOLD;
   if (!pinching) return;
 
-  // project index tip into sliderPanel local space
+  // project RIGHT index tip into the LEFT wrist slider's local space
   const idxWorld = new THREE.Vector3(
     pI.transform.position.x,
     pI.transform.position.y,
@@ -288,10 +300,8 @@ function updateSliderInteraction(frame) {
 
   // move knob (smoothed)
   sliderKnob.position.x = THREE.MathUtils.lerp(sliderKnob.position.x, clampedX, 0.35);
-
-  // optional color feedback
-  // sliderTrack.material.color.setHSL(THREE.MathUtils.mapLinear(sliderValue, SLIDER_MIN, SLIDER_MAX, 0.0, 0.33), 0.6, 0.55);
 }
+
 
 // Accessor you can use elsewhere
 function getSliderValue() { return sliderValue; }

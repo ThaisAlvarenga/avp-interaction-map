@@ -202,41 +202,55 @@ sliderKnob.position.x = valueToX(sliderValue);
 
 
 // VOLTAGE LABEL (canvas-based text)
+// Voltage label (canvas-based text)
 const voltageCanvas = document.createElement('canvas');
-voltageCanvas.width = 512;
-voltageCanvas.height = 128;
+voltageCanvas.width = 1024;              // higher res for crisp text
+voltageCanvas.height = 256;
 const voltageCtx = voltageCanvas.getContext('2d');
-voltageCtx.font = '42px system-ui, sans-serif';
-voltageCtx.fillStyle = '#ffffff';
-voltageCtx.textAlign = 'center';
-voltageCtx.textBaseline = 'middle';
 
 const voltageTexture = new THREE.CanvasTexture(voltageCanvas);
 voltageTexture.colorSpace = THREE.SRGBColorSpace;
+voltageTexture.minFilter = THREE.LinearFilter;
+voltageTexture.magFilter = THREE.LinearFilter;
 
+const voltageMat = new THREE.MeshBasicMaterial({
+  map: voltageTexture,
+  transparent: true,
+  depthTest: false,          // <-- ensure it draws on top of the panel
+  depthWrite: false,
+  side: THREE.DoubleSide     // <-- in case the panel is flipped
+});
+
+// a bit wider/taller and slightly closer to the camera
 const voltageLabel = new THREE.Mesh(
-  new THREE.PlaneGeometry(0.25, 0.07),
-  new THREE.MeshBasicMaterial({ map: voltageTexture, transparent: true })
+  new THREE.PlaneGeometry(0.30, 0.09),
+  voltageMat
 );
-voltageLabel.position.set(0, 0.07, 0.002); // slightly above the track
+voltageLabel.position.set(0, 0.09, 0.006);  // above and out from the panel
 sliderPanel.add(voltageLabel);
 
 // helper to draw text into the label
 function updateVoltageLabel(v) {
   const W = voltageCanvas.width, H = voltageCanvas.height;
   voltageCtx.clearRect(0, 0, W, H);
+
+  // background pill
   voltageCtx.fillStyle = 'rgba(0,0,0,0.55)';
   voltageCtx.fillRect(0, 0, W, H);
+
+  // text
   voltageCtx.fillStyle = '#ffffff';
-  voltageCtx.font = 'bold 48px system-ui, sans-serif';
+  voltageCtx.font = 'bold 120px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
   voltageCtx.textAlign = 'center';
   voltageCtx.textBaseline = 'middle';
-  voltageCtx.fillText(`Voltage: ${v.toFixed(2)} V`, W / 2, H / 2);
+  voltageCtx.fillText(`Voltage: ${v.toFixed(2)} V`, W/2, H/2);
+
   voltageTexture.needsUpdate = true;
 }
 
 // initial draw
 updateVoltageLabel(sliderValue);
+
 
 
 
@@ -571,6 +585,9 @@ renderer.setAnimationLoop((t, frame) => {
    // Slider updates
   updateSliderPose(frame);
   updateSliderInteraction(frame);
+
+    // keep the text refreshed (shows even before first pinch)
+  updateVoltageLabel(sliderValue);
 
   // Header: compact booleans for actions
   const header =

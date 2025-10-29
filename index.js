@@ -191,10 +191,14 @@ sliderPanel.add(sliderTrack);
 sliderPanel.add(sliderKnob);
 
 // Local placement relative to wrist (tweak to taste)
-sliderPanel.position.set(0.07, 0.00, -0.06);  // a bit to the outside and forward
-
-
 sliderPanel.position.set(0.07, 0.02, -0.05); // a bit higher/closer than before
+
+// Stronger tilt upward (X-axis) and rotate toward user's right (Y-axis)
+sliderPanel.rotation.set(
+  THREE.MathUtils.degToRad(-35),  // X rotation → tilt UP more (negative = face user)
+  THREE.MathUtils.degToRad(-25),  // Y rotation → rotate toward user's right
+  0                               // Z rotation → leave flat
+);
 
 // Tilt UP by ~20 degrees around local X on the middle node (in radians)
 const PANEL_TILT_X = THREE.MathUtils.degToRad(20);

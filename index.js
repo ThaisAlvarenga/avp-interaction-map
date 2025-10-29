@@ -200,6 +200,46 @@ const xToValue = (x) => THREE.MathUtils.clamp(
 // Initial knob position
 sliderKnob.position.x = valueToX(sliderValue);
 
+
+// VOLTAGE LABEL (canvas-based text)
+const voltageCanvas = document.createElement('canvas');
+voltageCanvas.width = 512;
+voltageCanvas.height = 128;
+const voltageCtx = voltageCanvas.getContext('2d');
+voltageCtx.font = '42px system-ui, sans-serif';
+voltageCtx.fillStyle = '#ffffff';
+voltageCtx.textAlign = 'center';
+voltageCtx.textBaseline = 'middle';
+
+const voltageTexture = new THREE.CanvasTexture(voltageCanvas);
+voltageTexture.colorSpace = THREE.SRGBColorSpace;
+
+const voltageLabel = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.25, 0.07),
+  new THREE.MeshBasicMaterial({ map: voltageTexture, transparent: true })
+);
+voltageLabel.position.set(0, 0.07, 0.002); // slightly above the track
+sliderPanel.add(voltageLabel);
+
+// helper to draw text into the label
+function updateVoltageLabel(v) {
+  const W = voltageCanvas.width, H = voltageCanvas.height;
+  voltageCtx.clearRect(0, 0, W, H);
+  voltageCtx.fillStyle = 'rgba(0,0,0,0.55)';
+  voltageCtx.fillRect(0, 0, W, H);
+  voltageCtx.fillStyle = '#ffffff';
+  voltageCtx.font = 'bold 48px system-ui, sans-serif';
+  voltageCtx.textAlign = 'center';
+  voltageCtx.textBaseline = 'middle';
+  voltageCtx.fillText(`Voltage: ${v.toFixed(2)} V`, W / 2, H / 2);
+  voltageTexture.needsUpdate = true;
+}
+
+// initial draw
+updateVoltageLabel(sliderValue);
+
+
+
 // XR ref space from your HUD block or create our own handle
 let xrRefSpace_local = null;
 
@@ -317,6 +357,8 @@ function updateSliderInteraction(frame) {
 
   // move knob (smoothed)
   sliderKnob.position.x = THREE.MathUtils.lerp(sliderKnob.position.x, clampedX, 0.35);
+
+  updateVoltageLabel(sliderValue);
 
 
 }

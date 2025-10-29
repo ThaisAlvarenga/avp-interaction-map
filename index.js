@@ -19,7 +19,10 @@ renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 
 // XR button
-document.body.appendChild(XRButton.createButton(renderer));
+document.body.appendChild(XRButton.createButton(renderer, {
+  requiredFeatures: ['local-floor'],
+  optionalFeatures: ['hand-tracking']
+}));
 
 // --- Scene & Camera ---
 // create scene
@@ -138,13 +141,156 @@ function handleController(controller) {
   }
 }
 
+// ===== World-space HUD (head-locked) + Input Map =====
+
+// High-level flags for WebXR actions
+const activeFlags = { selectL:false, selectR:false, squeezeL:false, squeezeR:false };
+function labelFrom(src) { return (src.handedness || 'none')[0].toUpperCase(); } // L/R/N
+
+// XR reference space for joint poses
+let xrRefSpace = null;
+
+// Build a head-locked HUD (plane) that we draw text onto
+let hudCanvas, hudCtx, hudTexture, hudMesh;
+function ensureWorldHud() {
+  if (hudMesh) return;
+
+  // hi-res canvas for crisp text
+  hudCanvas = document.createElement('canvas');
+  hudCanvas.width = 1024;   // increase for sharper text (costs a bit of perf)
+  hudCanvas.height = 512;
+  hudCtx = hudCanvas.getContext('2d');
+
+  hudTexture = new THREE.CanvasTexture(hudCanvas);
+  hudTexture.colorSpace = THREE.SRGBColorSpace;
+
+  const mat = new THREE.MeshBasicMaterial({
+    map: hudTexture,
+    transparent: true,
+    depthTest: false,   // always on top
+    depthWrite: false
+  });
+
+  // ~90cm wide, 45cm tall panel in front of the eyes
+  const geo = new THREE.PlaneGeometry(0.9, 0.45);
+  hudMesh = new THREE.Mesh(geo, mat);
+  hudMesh.renderOrder = 9999;
+  hudMesh.position.set(0, -0.06, -0.85); // centered, a little below gaze
+  camera.add(hudMesh);
+  scene.add(camera);
+}
+
+function drawHud(text) {
+  if (!hudCanvas) return;
+  const W = hudCanvas.width, H = hudCanvas.height;
+
+  hudCtx.clearRect(0, 0, W, H);
+  // background panel
+  hudCtx.fillStyle = 'rgba(0,0,0,0.55)';
+  hudCtx.fillRect(0, 0, W, H);
+
+  // text
+  hudCtx.fillStyle = '#ffffff';
+  hudCtx.font = '28px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+  hudCtx.textBaseline = 'top';
+
+  const lines = String(text).split('\n');
+  const lineH = 34;
+  let y = 16;
+  for (const line of lines) { hudCtx.fillText(line, 16, y); y += lineH; }
+
+  hudTexture.needsUpdate = true;
+}
+
+function setHudText(text) { drawHud(text); }
+
+// ——— Input inspection helpers ———
+const PINCH_THRESHOLD_METERS = 0.018; // ~1.8cm: good default for AVP
+function ff(x, d=2) { return (x!==undefined && x!==null) ? x.toFixed(d) : '—'; }
+
+function snapshotInputs(session, frame, referenceSpace) {
+  const lines = [];
+  for (const src of session.inputSources) {
+    const kind = src.hand ? 'hand' : (src.gamepad ? 'gamepad' : (src.targetRayMode || 'unknown'));
+    const hand = src.handedness || 'none';
+    const prof = (src.profiles && src.profiles.length) ? src.profiles.join(',') : '—';
+
+    // Controllers (Gamepad API)
+    let ctrlInfo = '';
+    if (src.gamepad) {
+      const pressed = src.gamepad.buttons.map((b,i)=> b.pressed ? `B${i}` : null).filter(Boolean).join(' ');
+      const axes = src.gamepad.axes.map(a=>ff(a,2)).join(', ');
+      ctrlInfo = ` | buttons: ${pressed || 'none'} | axes: [${axes}]`;
+    }
+
+    // Hands (joint-based pinch detector)
+    let pinchInfo = '';
+    if (src.hand && frame && referenceSpace) {
+      // Cross-impl: try WebXR Hand Input names first, then XRHand indices if exposed
+      const ht = src.hand;
+      const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand !== 'undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
+      const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand !== 'undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
+
+      const pIndex = tipIndex ? frame.getJointPose(tipIndex, referenceSpace) : null;
+      const pThumb = tipThumb ? frame.getJointPose(tipThumb, referenceSpace) : null;
+
+      if (pIndex && pThumb) {
+        const dx = pIndex.transform.position.x - pThumb.transform.position.x;
+        const dy = pIndex.transform.position.y - pThumb.transform.position.y;
+        const dz = pIndex.transform.position.z - pThumb.transform.position.z;
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        const isPinching = dist < PINCH_THRESHOLD_METERS;
+        pinchInfo = ` | pinchDist: ${ff(dist,3)}m ${isPinching ? '→ PINCH' : ''}`;
+      } else {
+        pinchInfo = ' | pinch: n/a';
+      }
+    }
+
+    lines.push(`[${hand}] ${kind} | targetRay: ${src.targetRayMode || '—'} | profiles: ${prof}${ctrlInfo}${pinchInfo}`);
+  }
+  return lines.length ? lines.join('\n') : 'No inputSources (hands/controllers not detected).';
+}
+
+// Bind XR events
+renderer.xr.addEventListener('sessionstart', async () => {
+  const session = renderer.xr.getSession();
+  xrRefSpace = await session.requestReferenceSpace('local-floor');
+  ensureWorldHud();
+
+  // High-level action flags from WebXR events (controllers & hand-select)
+  session.addEventListener('selectstart',  (e)=> activeFlags['select'+labelFrom(e.inputSource)] = true);
+  session.addEventListener('selectend',    (e)=> activeFlags['select'+labelFrom(e.inputSource)] = false);
+  session.addEventListener('squeezestart', (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = true);
+  session.addEventListener('squeezeend',   (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = false);
+
+  setHudText('XR Input: session started…');
+});
+
+renderer.xr.addEventListener('sessionend', () => {
+  xrRefSpace = null;
+  setHudText('XR Input: session ended');
+});
+
+
 // --- Animate ---
-renderer.setAnimationLoop((t) => {
+renderer.setAnimationLoop((t, frame) => {
   const dt = t * 0.001;
   box.rotation.y = dt * 0.7;
 
   handleController(controller1);
   handleController(controller2);
+
+  // Build the HUD text
+  const header =
+    `select[L:${!!activeFlags.selectL} R:${!!activeFlags.selectR}]  ` +
+    `squeeze[L:${!!activeFlags.squeezeL} R:${!!activeFlags.squeezeR}]`;
+
+  const session = renderer.xr.getSession?.();
+  const details = (session && xrRefSpace)
+    ? snapshotInputs(session, frame, xrRefSpace)
+    : 'XR session not active.';
+
+  setHudText(`${header}\n${details}`);
 
   orbit.update();
   renderer.render(scene, camera);

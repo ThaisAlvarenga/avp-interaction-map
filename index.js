@@ -1,12 +1,9 @@
 // Use one consistent Three.js version everywhere (here: 0.165.0)
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
-// OrbitControls for camera interaction
 import { OrbitControls } from "https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js";
-// XRButton to enter VR mode
 import { XRButton } from "https://unpkg.com/three@0.165.0/examples/jsm/webxr/XRButton.js";
 
-
-// --- RENDERER ---
+// --- Renderer ---
 
 // create renderer with antialiasing and a dark background
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false }); 
@@ -22,12 +19,9 @@ renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 
 // XR button
-document.body.appendChild(XRButton.createButton(renderer, {
-  requiredFeatures: ['local-floor'],
-  optionalFeatures: ['hand-tracking']   // keep hand tracking if available
-}));
+document.body.appendChild(XRButton.createButton(renderer));
 
-// --- SCENE AND CAMERA ---
+// --- Scene & Camera ---
 // create scene
 const scene = new THREE.Scene();
 // set a background color for scene
@@ -49,7 +43,7 @@ orbit.target.set(0, 1.4, 0);
 // update the orbit to use the new target
 orbit.enableDamping = true;
 
-// --- LIGHTS ---
+// --- Lights ---
 // hemisphere light for ambient lighting
 scene.add(new THREE.HemisphereLight(0xbbbbcc, 0x222233, 0.6));
 // directional light to act as the sun
@@ -61,8 +55,7 @@ dir.castShadow = true;
 // add setup shadow properties for the light
 scene.add(dir);
 
-// --- FLOOR ---
-
+// --- Floor ---
 // large plane as floor
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(10, 10),
@@ -75,8 +68,7 @@ floor.receiveShadow = true;
 // allow floor to receive shadows
 scene.add(floor);
 
-// --- BOX ---
-
+// --- Box ---
 const box = new THREE.Mesh(
 // box geometry and standard material
   new THREE.BoxGeometry(0.4, 0.4, 0.4),
@@ -89,59 +81,46 @@ box.castShadow = true;
 // add box to the scene
 scene.add(box);
 
-// --- RESIZE ---
-
+// --- Resize ---
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// --- CONTROLLER SETUP ---
-// temporary matrix for raycasting
+// --- Controller setup ---
 const tempMatrix = new THREE.Matrix4();
-// raycaster for controller interaction
 const raycaster = new THREE.Raycaster();
-// array of selectable objects
 const selectable = [box];
 
 // Controller 1 (primary)
 const controller1 = renderer.xr.getController(0);
-// add event listeners for select start and end
 controller1.addEventListener('selectstart', onSelectStart);
 controller1.addEventListener('selectend', onSelectEnd);
 scene.add(controller1);
 
 // Controller 2 (optional second hand)
 const controller2 = renderer.xr.getController(1);
-// add event listeners for select start and end
 controller2.addEventListener('selectstart', onSelectStart);
 controller2.addEventListener('selectend', onSelectEnd);
 scene.add(controller2);
 
 // Add visible rays to each controller
 function makeRay() {
-// create a simple line geometry for the ray
   const geom = new THREE.BufferGeometry().setFromPoints([ new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1) ]);
-  // create a basic line material
   const mat  = new THREE.LineBasicMaterial({ linewidth: 2 });
-  // create the line object
   const line = new THREE.Line(geom, mat);
   line.name = 'ray';
   line.scale.z = 5;
   return line;
 }
-// add rays to controllers
 controller1.add(makeRay());
 controller2.add(makeRay());
 
 // Simple “select changes color” behavior
-// Start selecting
 function onSelectStart(e) { e.target.userData.isSelecting = true; }
-// End selecting
 function onSelectEnd(e)   { e.target.userData.isSelecting = false; }
 
-// Handle controller interaction
 function handleController(controller) {
   // Update raycast
   tempMatrix.identity().extractRotation(controller.matrixWorld);
@@ -159,123 +138,7 @@ function handleController(controller) {
   }
 }
 
-// ---------- INPUT MAP (hands/controllers) ----------
-const PINCH_THRESHOLD_METERS = 0.018;
-function formatFloat(x, d=2) { return (x!==undefined && x!==null) ? x.toFixed(d) : '—'; }
-
-function snapshotInputs(session, frame, referenceSpace) {
-  const lines = [];
-  for (const src of session.inputSources) {
-    const kind = src.hand ? 'hand' : (src.gamepad ? 'gamepad' : src.targetRayMode);
-    const hand = src.handedness || 'none';
-    const profs = (src.profiles?.length ? src.profiles.join(',') : '—');
-
-    let btnInfo = '';
-    if (src.gamepad) {
-      const pressed = src.gamepad.buttons.map((b,i)=> b.pressed ? `B${i}` : null).filter(Boolean).join(' ');
-      const axes    = src.gamepad.axes.map(a=>formatFloat(a,2)).join(', ');
-      btnInfo = ` | buttons: ${pressed || 'none'} | axes: [${axes}]`;
-    }
-
-    let pinchInfo = '';
-    if (src.hand && frame && referenceSpace) {
-      const ht = src.hand;
-      const tipIndex = ht.get?.('index-finger-tip') || ht[XRHand?.INDEX_PHALANX_TIP];
-      const tipThumb = ht.get?.('thumb-tip')        || ht[XRHand?.THUMB_PHALANX_TIP];
-      const pIndex = tipIndex ? frame.getJointPose(tipIndex, referenceSpace) : null;
-      const pThumb = tipThumb ? frame.getJointPose(tipThumb, referenceSpace) : null;
-      if (pIndex && pThumb) {
-        const dx = pIndex.transform.position.x - pThumb.transform.position.x;
-        const dy = pIndex.transform.position.y - pThumb.transform.position.y;
-        const dz = pIndex.transform.position.z - pThumb.transform.position.z;
-        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        const isPinching = dist < PINCH_THRESHOLD_METERS;
-        pinchInfo = ` | pinchDist: ${formatFloat(dist,3)}m ${isPinching ? '→ PINCH' : ''}`;
-      } else {
-        pinchInfo = ' | pinch: n/a';
-      }
-    }
-
-    lines.push(`[${hand}] ${kind} | targetRay: ${src.targetRayMode || '—'} | profiles: ${profs}${btnInfo}${pinchInfo}`);
-  }
-  return lines.length ? lines.join('\n') : 'No inputSources (hands/controllers not detected).';
-}
-
-// High-level action flags
-const activeFlags = { selectL:false, selectR:false, squeezeL:false, squeezeR:false };
-function labelFrom(src) { return (src.handedness || 'none')[0].toUpperCase(); }
-
-function bindInputEvents(session) {
-  session.addEventListener('selectstart',  (e)=> activeFlags['select'+labelFrom(e.inputSource)] = true);
-  session.addEventListener('selectend',    (e)=> activeFlags['select'+labelFrom(e.inputSource)] = false);
-  session.addEventListener('squeezestart', (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = true);
-  session.addEventListener('squeezeend',   (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = false);
-}
-
-// --- XR ref space ---
-let xrRefSpace = null;
-renderer.xr.addEventListener('sessionstart', async () => {
-  const session = renderer.xr.getSession();
-  xrRefSpace = await session.requestReferenceSpace('local-floor');
-  bindInputEvents(session);
-  ensureWorldHud();
-  setHudText('XR Input: session started…');
-});
-
-renderer.xr.addEventListener('sessionend', () => {
-  xrRefSpace = null;
-  setHudText('XR Input: session ended');
-});
-
-// ===== World-space HUD (head-locked) =====
-let hudCanvas, hudCtx, hudTexture, hudMesh;
-
-function ensureWorldHud() {
-  if (hudMesh) return;
-  hudCanvas = document.createElement('canvas');
-  hudCanvas.width = 1024;
-  hudCanvas.height = 512;
-  hudCtx = hudCanvas.getContext('2d');
-
-  hudTexture = new THREE.CanvasTexture(hudCanvas);
-  hudTexture.colorSpace = THREE.SRGBColorSpace;
-
-  const mat = new THREE.MeshBasicMaterial({
-    map: hudTexture,
-    transparent: true,
-    depthTest: false,
-    depthWrite: false
-  });
-
-  const geo = new THREE.PlaneGeometry(0.9, 0.45); // ~90cm x 45cm
-  hudMesh = new THREE.Mesh(geo, mat);
-  hudMesh.renderOrder = 9999;
-  hudMesh.position.set(0, -0.06, -0.85); // center, slightly below gaze
-  camera.add(hudMesh);
-  scene.add(camera);
-}
-
-function drawHud(text) {
-  if (!hudCanvas) return;
-  const W = hudCanvas.width, H = hudCanvas.height;
-  hudCtx.clearRect(0, 0, W, H);
-  hudCtx.fillStyle = 'rgba(0,0,0,0.55)';
-  hudCtx.fillRect(0, 0, W, H);
-  hudCtx.fillStyle = '#ffffff';
-  hudCtx.font = '28px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-  hudCtx.textBaseline = 'top';
-  const lines = String(text).split('\n');
-  const lineH = 34;
-  let y = 16;
-  for (const line of lines) { hudCtx.fillText(line, 16, y); y += lineH; }
-  hudTexture.needsUpdate = true;
-}
-
-function setHudText(text) { drawHud(text); }
-// ---------- Update HUD every frame ----------
-const _render = renderer.render.bind(renderer);
-
-// --- ANIMATE ---
+// --- Animate ---
 renderer.setAnimationLoop((t) => {
   const dt = t * 0.001;
   box.rotation.y = dt * 0.7;
@@ -283,17 +146,6 @@ renderer.setAnimationLoop((t) => {
   handleController(controller1);
   handleController(controller2);
 
-  // Build HUD text
-  const header = `select[L:${!!activeFlags.selectL} R:${!!activeFlags.selectR}]  ` +
-                 `squeeze[L:${!!activeFlags.squeezeL} R:${!!activeFlags.squeezeR}]`;
-  const session = renderer.xr.getSession?.();
-  const details = (session && xrRefSpace)
-    ? snapshotInputs(session, frame, xrRefSpace)
-    : 'XR session not active.';
-
-  setHudText(`${header}\n${details}`);
-
-  // finally render
   orbit.update();
-  _render(scene, camera);
+  renderer.render(scene, camera);
 });

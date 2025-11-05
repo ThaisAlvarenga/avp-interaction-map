@@ -1,7 +1,8 @@
 // Use one consistent Three.js version everywhere (here: 0.165.0)
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { XRButton } from 'three/addons/webxr/XRButton.js';
+import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
+import { OrbitControls } from "https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js";
+import { XRButton } from "https://unpkg.com/three@0.165.0/examples/jsm/webxr/XRButton.js";
+
 // --- Renderer ---
 
 // create renderer with antialiasing and a dark background
@@ -16,9 +17,6 @@ renderer.xr.enabled = true;
 renderer.shadowMap.enabled = true;
 // add the canvas to the document
 document.body.appendChild(renderer.domElement);
-
-const clock = new THREE.Clock();
-
 
 // XR button
 document.body.appendChild(XRButton.createButton(renderer, {
@@ -42,14 +40,6 @@ const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerH
 
 // position the camera
 camera.position.set(0, 1.6, 3);
-
-// --- Camera Rig (parent for movement) ---
-const rig = new THREE.Object3D();
-rig.position.set(0, 0, 0);
-rig.add(camera);
-scene.add(rig);
-
-
 
 // --- Orbit Controls ---
 const orbit = new OrbitControls(camera, renderer.domElement);
@@ -161,65 +151,17 @@ function handleController(controller) {
   }
 }
 
-// ================= NAVIGATION HELPERS =================
-
-const MOVE_SPEED_MPS = 1.2; // meters per second (tweak to taste)
-
-// Return true if the given hand is pinching (thumb–index distance below threshold)
-function isHandPinching(frame, handedness) {
-  if (!frame || !xrRefSpace) return false;
-
-  const session = renderer.xr.getSession?.();
-  if (!session) return false;
-
-  // find hand input source
-  let handSrc = null;
-  for (const src of session.inputSources) {
-    if (src.hand && src.handedness === handedness) { handSrc = src; break; }
-  }
-  if (!handSrc || !handSrc.hand) return false;
-
-  const ht = handSrc.hand;
-  const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand!=='undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
-  const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand!=='undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
-  if (!tipIndex || !tipThumb) return false;
-
-  const pI = frame.getJointPose(tipIndex, xrRefSpace);
-  const pT = frame.getJointPose(tipThumb, xrRefSpace);
-  if (!pI || !pT) return false;
-
-  const dx = pI.transform.position.x - pT.transform.position.x;
-  const dy = pI.transform.position.y - pT.transform.position.y;
-  const dz = pI.transform.position.z - pT.transform.position.z;
-  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-
-  return dist < PINCH_THRESHOLD_METERS; // you already defined this constant
-}
-
-// Move the rig forward (+dir) / backward (-dir) along camera facing, flattened to ground
-function moveRigAlongView(dir, dt) {
-  if (dt <= 0) return;
-
-  const forward = new THREE.Vector3();
-  camera.getWorldDirection(forward);
-  forward.y = 0;                   // keep motion level (no vertical drift)
-  if (forward.lengthSq() < 1e-6) return;
-  forward.normalize();
-
-  rig.position.addScaledVector(forward, dir * MOVE_SPEED_MPS * dt);
-}
-// ================= END NAVIGATION HELPERS
-
 // ================== LEFT-WRIST SLIDER (WORLD-SPACE) ==================
 const SLIDER_MIN = -1.4;
 const SLIDER_MAX =  0.4;
 const TRACK_LEN_M = 0.18;        // 18 cm
-const PINCH_THRESHOLD_METERS = 0.018;   // ~1.8 cm
+const PINCH_THRESHOLD = 0.018;   // ~1.8 cm
 
 let sliderValue = 0.0;
 let leftHandSource = null;
 let rightHandSource = null;
 
+// Scene objects
 // Scene objects
 const sliderRoot  = new THREE.Object3D(); // follows wrist or controller (pose applied here)
 const sliderTilt  = new THREE.Object3D(); // holds ONLY the tilt angle
@@ -262,8 +204,8 @@ sliderPanel.rotation.set(
 );
 
 // Tilt UP by ~20 degrees around local X on the middle node (in radians)
-const PANEL_TILT_X = THREE.MathUtils.degToRad(20);
-sliderTilt.rotation.set(PANEL_TILT_X, 0, 0);
+// const PANEL_TILT_X = THREE.MathUtils.degToRad(20);
+// sliderTilt.rotation.set(PANEL_TILT_X, 0, 0);
 
 // Helpers to map value <-> X along the track
 const valueToX = (v) => THREE.MathUtils.mapLinear(v, SLIDER_MIN, SLIDER_MAX, -TRACK_LEN_M/2, TRACK_LEN_M/2);
@@ -356,7 +298,7 @@ updateVoltageLabel(sliderValue);
 
 
 // XR ref space from your HUD block or create our own handle
-let xrRefSpace = null;
+let xrRefSpace_local = null;
 
 // Discover left and right hand source when session starts / inputs change
 function updateLeftHandSource(session) {
@@ -383,6 +325,16 @@ function findHand(session, handedness) {
 }
 
 
+renderer.xr.addEventListener('sessionstart', async () => {
+  const session = renderer.xr.getSession();
+  try { xrRefSpace_local = await session.requestReferenceSpace('local-floor'); } catch {}
+  updateLeftHandSource(session);   // left = mount pose
+  updateRightHandSource(session);  // right = interaction hand
+  session.addEventListener('inputsourceschange', () => {
+    updateLeftHandSource(session);
+    updateRightHandSource(session);
+  });
+});
 
 // Pose sliderRoot at left wrist (or left controller grip if no hands)
 const _tmpObj = new THREE.Object3D();
@@ -391,11 +343,11 @@ function updateSliderPose(frame) {
   if (!session) return;
 
   // 1) Prefer hand wrist
-  if (leftHandSource && leftHandSource.hand && xrRefSpace) {
+  if (leftHandSource && leftHandSource.hand && xrRefSpace_local) {
     const ht = leftHandSource.hand;
     const wristJoint = ht.get?.('wrist') || (typeof XRHand!=='undefined' && ht[XRHand.WRIST]);
     if (wristJoint) {
-      const pose = frame.getJointPose(wristJoint, xrRefSpace);
+      const pose = frame.getJointPose(wristJoint, xrRefSpace_local);
       if (pose) {
         const { position, orientation } = pose.transform;
         sliderRoot.position.set(position.x, position.y, position.z);
@@ -421,7 +373,7 @@ function updateSliderPose(frame) {
 
 // Pinch-drag interaction (hands only)
 function updateSliderInteraction(frame) {
-  if (!xrRefSpace) return;
+  if (!xrRefSpace_local) return;
 
   const session = renderer.xr.getSession?.();
   if (!session) return;
@@ -436,8 +388,8 @@ function updateSliderInteraction(frame) {
   const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand!=='undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
   if (!tipIndex || !tipThumb) return;
 
-  const pI = frame.getJointPose(tipIndex, xrRefSpace);
-  const pT = frame.getJointPose(tipThumb, xrRefSpace);
+  const pI = frame.getJointPose(tipIndex, xrRefSpace_local);
+  const pT = frame.getJointPose(tipThumb, xrRefSpace_local);
   if (!pI || !pT) return;
 
   // detect pinch on RIGHT hand only
@@ -445,7 +397,7 @@ function updateSliderInteraction(frame) {
   const dy = pI.transform.position.y - pT.transform.position.y;
   const dz = pI.transform.position.z - pT.transform.position.z;
   const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-  const pinching = dist < PINCH_THRESHOLD_METERS;
+  const pinching = dist < PINCH_THRESHOLD;
   if (!pinching) return;
 
   // project RIGHT index tip into the LEFT wrist slider's local space
@@ -495,8 +447,9 @@ const HUD_CFG = {
 const activeFlags = { selectL:false, selectR:false, squeezeL:false, squeezeR:false };
 function labelFrom(src) { return (src.handedness || 'none')[0].toUpperCase(); } // L/R/N
 
-//let xrRefSpace = null;
+let xrRefSpace = null;
 
+const PINCH_THRESHOLD_METERS = 0.018;
 const ff = (x, d=2) => (x!==undefined && x!==null) ? x.toFixed(d) : '—';
 
 // Produce **clean** lines for the HUD
@@ -654,14 +607,6 @@ renderer.xr.addEventListener('sessionstart', async () => {
   session.addEventListener('squeezestart', (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = true);
   session.addEventListener('squeezeend',   (e)=> activeFlags['squeeze'+labelFrom(e.inputSource)] = false);
 
-  // keep tracking hand sources here too:
-  updateLeftHandSource(session);
-  updateRightHandSource(session);
-  session.addEventListener('inputsourceschange', () => {
-    updateLeftHandSource(session);
-    updateRightHandSource(session);
-  });
-
   drawHud('XR Input: session started…', []);
 });
 
@@ -675,7 +620,7 @@ renderer.xr.addEventListener('sessionend', () => {
 
 // --- Animate ---
 renderer.setAnimationLoop((t, frame) => {
-  const dt = clock.getDelta(); // seconds since last frame
+  const dt = t * 0.001;
   box.rotation.y = dt * 0.7;
 
   handleController(controller1);
@@ -705,23 +650,7 @@ renderer.setAnimationLoop((t, frame) => {
 
   drawHud(header, bodyLines);
 
-  // --- Gesture navigation ---
-  if (renderer.xr.isPresenting && xrRefSpace) {
-    const leftPinch  = isHandPinching(frame, 'left');
-    const rightPinch = isHandPinching(frame, 'right');
-
-    if (leftPinch && rightPinch) {
-      // both pinching → move backward
-      moveRigAlongView(-1, dt);
-    } else if (leftPinch) {
-      // left only → move forward
-      moveRigAlongView(+1, dt);
-    }
-}
-
-orbit.enabled = !renderer.xr.isPresenting;
-if (!orbit.enabled) orbit.update(); // harmless no-op
-
+  orbit.update();
   renderer.render(scene, camera);
 });
 

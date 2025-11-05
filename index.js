@@ -258,7 +258,7 @@ sliderPanel.rotation.set(
 );
 
 // Tilt UP by ~20 degrees around local X on the middle node (in radians)
-const PANEL_TILT_X = THREE.MathUtils.degToRad(20);
+const PANEL_TILT_X = THREE.MathUtils.degToRad(45);
 sliderTilt.rotation.set(PANEL_TILT_X, 0, 0);
 
 // Helpers to map value <-> X along the track
@@ -718,7 +718,7 @@ renderer.setAnimationLoop((t, frame) => {
       moveRigAlongView(+1, dt);
     }
   }
-  
+
   orbit.update();
   renderer.render(scene, camera);
 });

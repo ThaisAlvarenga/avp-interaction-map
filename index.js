@@ -41,6 +41,12 @@ const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerH
 // position the camera
 camera.position.set(0, 1.6, 3);
 
+// --- Camera Rig (parent for movement) ---
+const rig = new THREE.Object3D();
+rig.position.set(0, 0, 0);
+rig.add(camera);
+scene.add(rig);
+
 // --- Orbit Controls ---
 const orbit = new OrbitControls(camera, renderer.domElement);
 // set orbit target to be at human eye level
@@ -151,6 +157,55 @@ function handleController(controller) {
   }
 }
 
+// ================= NAVIGATION HELPERS =================
+
+const MOVE_SPEED_MPS = 1.2; // meters per second (tweak to taste)
+
+// Return true if the given hand is pinching (thumb–index distance below threshold)
+function isHandPinching(frame, handedness) {
+  if (!frame || !xrRefSpace) return false;
+
+  const session = renderer.xr.getSession?.();
+  if (!session) return false;
+
+  // find hand input source
+  let handSrc = null;
+  for (const src of session.inputSources) {
+    if (src.hand && src.handedness === handedness) { handSrc = src; break; }
+  }
+  if (!handSrc || !handSrc.hand) return false;
+
+  const ht = handSrc.hand;
+  const tipIndex = ht.get?.('index-finger-tip') || (typeof XRHand!=='undefined' && ht[XRHand.INDEX_PHALANX_TIP]);
+  const tipThumb = ht.get?.('thumb-tip')        || (typeof XRHand!=='undefined' && ht[XRHand.THUMB_PHALANX_TIP]);
+  if (!tipIndex || !tipThumb) return false;
+
+  const pI = frame.getJointPose(tipIndex, xrRefSpace);
+  const pT = frame.getJointPose(tipThumb, xrRefSpace);
+  if (!pI || !pT) return false;
+
+  const dx = pI.transform.position.x - pT.transform.position.x;
+  const dy = pI.transform.position.y - pT.transform.position.y;
+  const dz = pI.transform.position.z - pT.transform.position.z;
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+  return dist < PINCH_THRESHOLD_METERS; // you already defined this constant
+}
+
+// Move the rig forward (+dir) / backward (-dir) along camera facing, flattened to ground
+function moveRigAlongView(dir, dt) {
+  if (dt <= 0) return;
+
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.y = 0;                   // keep motion level (no vertical drift)
+  if (forward.lengthSq() < 1e-6) return;
+  forward.normalize();
+
+  rig.position.addScaledVector(forward, dir * MOVE_SPEED_MPS * dt);
+}
+// ================= END NAVIGATION HELPERS
+
 // ================== LEFT-WRIST SLIDER (WORLD-SPACE) ==================
 const SLIDER_MIN = -1.4;
 const SLIDER_MAX =  0.4;
@@ -161,7 +216,6 @@ let sliderValue = 0.0;
 let leftHandSource = null;
 let rightHandSource = null;
 
-// Scene objects
 // Scene objects
 const sliderRoot  = new THREE.Object3D(); // follows wrist or controller (pose applied here)
 const sliderTilt  = new THREE.Object3D(); // holds ONLY the tilt angle
@@ -650,6 +704,21 @@ renderer.setAnimationLoop((t, frame) => {
 
   drawHud(header, bodyLines);
 
+  // --- Gesture navigation ---
+  if (renderer.xr.isPresenting && xrRefSpace) 
+  {
+    const leftPinch  = isHandPinching(frame, 'left');
+    const rightPinch = isHandPinching(frame, 'right');
+
+    if (leftPinch && rightPinch) {
+      // both pinching → move backward
+      moveRigAlongView(-1, dt);
+    } else if (leftPinch) {
+      // left only → move forward
+      moveRigAlongView(+1, dt);
+    }
+  }
+  
   orbit.update();
   renderer.render(scene, camera);
 });

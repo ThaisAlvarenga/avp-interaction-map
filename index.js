@@ -27,6 +27,7 @@ document.body.appendChild(XRButton.createButton(renderer, {
 // --- Scene & Camera ---
 // create scene
 const scene = new THREE.Scene();
+
 // set a background color for scene
 scene.background = new THREE.Color(0xbbbbcc);
     // 0x111122 navy blue
@@ -36,6 +37,7 @@ scene.background = new THREE.Color(0xbbbbcc);
 
 // create camera
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 100);
+
 // position the camera
 camera.position.set(0, 1.6, 3);
 
@@ -165,6 +167,7 @@ const sliderRoot  = new THREE.Object3D(); // follows wrist or controller (pose a
 const sliderTilt  = new THREE.Object3D(); // holds ONLY the tilt angle
 const sliderPanel = new THREE.Object3D(); // actual UI (track, knob, label)
 
+// add all slider elements to the scene
 scene.add(sliderRoot);
 sliderRoot.add(sliderTilt);
 sliderTilt.add(sliderPanel);
@@ -191,13 +194,13 @@ sliderPanel.add(sliderTrack);
 sliderPanel.add(sliderKnob);
 
 // Local placement relative to wrist (tweak to taste)
-sliderPanel.position.set(0.07, 0.02, -0.05); // a bit higher/closer than before
+sliderPanel.position.set(0.07, 0.02, -0.05); // a bit higher/closer than wrist
 
 // Stronger tilt upward (X-axis) and rotate toward user's right (Y-axis)
 sliderPanel.rotation.set(
   THREE.MathUtils.degToRad(0),  // X rotation → tilt UP more (negative = face user)
   THREE.MathUtils.degToRad(25),  // Y rotation → rotate toward user's right
-  THREE.MathUtils.degToRad(25)                               // Z rotation → leave flat
+  THREE.MathUtils.degToRad(90)                               // Z rotation → leave flat
 );
 
 // Tilt UP by ~20 degrees around local X on the middle node (in radians)
@@ -290,7 +293,7 @@ updateVoltageLabel(sliderValue);
 // XR ref space from your HUD block or create our own handle
 let xrRefSpace_local = null;
 
-// Discover left hand source when session starts / inputs change
+// Discover left and right hand source when session starts / inputs change
 function updateLeftHandSource(session) {
   leftHandSource = null;
   for (const src of session.inputSources) {

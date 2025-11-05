@@ -198,9 +198,9 @@ sliderPanel.position.set(0.07, 0.02, -0.05); // a bit higher/closer than wrist
 
 // Stronger tilt upward (X-axis) and rotate toward user's right (Y-axis)
 sliderPanel.rotation.set(
-  THREE.MathUtils.degToRad(0),  // X rotation → tilt UP more (negative = face user)
+  THREE.MathUtils.degToRad(45),  // X rotation → tilt UP more (negative = face user)
   THREE.MathUtils.degToRad(25),  // Y rotation → rotate toward user's right
-  THREE.MathUtils.degToRad(90)                               // Z rotation → leave flat
+  THREE.MathUtils.degToRad(-90)                               // Z rotation → leave flat
 );
 
 // Tilt UP by ~20 degrees around local X on the middle node (in radians)
@@ -219,6 +219,13 @@ sliderKnob.position.x = valueToX(sliderValue);
 
 
 // --- DEBUG AXES: make it big, in-front, and ignore depth so it's visible in XR ---
+
+/*
+X axis: Red
+Y axis: Green
+Z axis: Blue
+*/
+
 const axes = new THREE.AxesHelper(0.25);   // 25 cm — actually visible in-headset
 axes.position.set(0, 0, 0.03);             // nudge forward so it’s not coplanar
 axes.renderOrder = 9999;

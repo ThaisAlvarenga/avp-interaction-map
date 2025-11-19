@@ -747,10 +747,10 @@ renderer.setAnimationLoop((t, frame) => {
       const quat   = new THREE.Quaternion(ori.x, ori.y, ori.z, ori.w);
       const dir    = new THREE.Vector3(0, 0, -1).applyQuaternion(quat).normalize();
 
-      // Raycast against the slider knob
-      sliderRay.set(origin, dir);
-      const knobHits = sliderRay.intersectObject(sliderKnob, true);
-      rayOnKnob = knobHits.length > 0;
+      // Raycast against the entire slider panel (bg, track, knob, label, etc.)
+sliderRay.set(origin, dir);
+const sliderHits = sliderRay.intersectObject(sliderPanel, true);
+rayOnKnob = sliderHits.length > 0;
 
       // Check B0 on RIGHT side (where gamepad exists, e.g., Quest)
       if (logical.pinch.gamepad && logical.pinch.handedness === 'right') {

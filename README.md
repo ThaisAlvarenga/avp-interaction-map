@@ -163,3 +163,50 @@ However, this can break on the Vision Pro since:
 
 - ```[0]``` and ```[1]``` are the hands.
 - The actual select source is ```[2]```, the natural input with targetRayMode: "transient-pointer" and handedness: "none".
+
+A better cross-platform mental model would instead:
+- Build a logical device view, not just “inputSources in order”:
+- hands.left = any src.hand && src.handedness === 'left'
+- hands.right = any src.hand && src.handedness === 'right'
+- pointers = any src.targetRayMode === 'tracked-pointer' || src.targetRayMode === 'transient-pointer'
+
+For selection (click-like actions):
+
+- On Quest:
+
+    - Use select events from controllers or hand XRInputSources.
+
+    - Or src.gamepad.buttons[0] if you’re polling.
+
+- On AVP:
+
+    - Use select* events from transient-pointer sources (targetRayMode === 'transient-pointer').
+
+    - Use their targetRaySpace for raycasting.
+
+ HUD can show:
+
+- For each input: type = src.hand ? 'hand' : 'ctrl', mode = src.targetRayMode, btns, pinch dist.
+
+For manipulation near the hand (e.g., your wrist slider, grabbing objects):
+
+- Oculus:
+    - Use Hands
+    - From src.hand + joints (frame.getJointPose).
+    - Or grip space (on controllers) where available.
+
+- On AVP:
+    - hand XRInputSources are great for body-relative UIs (like your left wrist slider).
+    - Transient-pointer is more for “intent” and ray-based selection.
+
+For display & logging (what you’re doing now):
+
+- Continue listing:
+
+    - ```[L] han```
+
+    - ```[R] hand``` 
+
+    - ```[N] ctrl``` with ```ray: transient-pointer```
+
+When you build logic (not just HUD), remember that ```[N]``` one is the true semantic “click” on AVP.

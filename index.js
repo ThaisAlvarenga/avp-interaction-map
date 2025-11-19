@@ -316,6 +316,98 @@ function findHand(session, handedness) {
   return null;
 }
 
+// ====== UNIFIED INPUT ADAPTER  =======================================
+
+// Track which inputSource is currently "pinching / selecting"
+let currentPinchSource = null;
+
+// Called on sessionstart to attach listeners
+function bindSessionInputEvents(session) {
+  // Reset on new session
+  currentPinchSource = null;
+
+  session.addEventListener('selectstart', (e) => {
+    currentPinchSource = e.inputSource || null;
+  });
+
+  session.addEventListener('selectend', (e) => {
+    if (currentPinchSource === e.inputSource) {
+      currentPinchSource = null;
+    }
+  });
+
+  // You already have these in your HUD wiring, you can keep them there as well.
+}
+
+// Small helper to classify all inputSources each frame / on demand
+function getLogicalInputs(session) {
+  const logical = {
+    left: null,     // XRInputSource (hand or ctrl)
+    right: null,    // XRInputSource (hand or ctrl)
+    pinch: null,    // XRInputSource currently doing select (ctrl or transient-pointer)
+    hands: {
+      left: null,
+      right: null
+    },
+    controllers: [] // any non-hand XRInputSource
+  };
+
+  if (!session) return logical;
+
+  for (const src of session.inputSources) {
+    const handed = src.handedness || 'none';
+
+    // Hands (with joints)
+    if (src.hand) {
+      if (handed === 'left')  logical.hands.left  = src;
+      if (handed === 'right') logical.hands.right = src;
+    } else {
+      // Controllers / transient pointers
+      logical.controllers.push(src);
+
+      if (handed === 'left' && !logical.left)  logical.left  = src;
+      if (handed === 'right' && !logical.right) logical.right = src;
+    }
+  }
+
+  // Prefer hands as logical left/right if available
+  if (logical.hands.left)  logical.left  = logical.hands.left;
+  if (logical.hands.right) logical.right = logical.hands.right;
+
+  // Pinch source:
+  //  - On Quest: select comes from left/right (hand or ctrl)
+  //  - On AVP: select comes from transient-pointer (targetRayMode: "transient-pointer")
+  if (currentPinchSource) {
+    logical.pinch = currentPinchSource;
+  }
+
+  return logical;
+}
+
+// Helper to get a ray pose from an XRInputSource (controller or transient)
+function getTargetRayPose(inputSource, frame, refSpace) {
+  if (!inputSource || !frame || !refSpace) return null;
+  const space = inputSource.targetRaySpace || inputSource.targetRaySpace === 0
+    ? inputSource.targetRaySpace
+    : (inputSource.targetRaySpace ?? inputSource.gripSpace);
+  if (!space) return null;
+  return frame.getPose(space, refSpace);
+}
+
+// Helper to get a "hand space" pose (e.g. right wrist) for body-relative UI
+function getHandJointPose(handSource, jointName, frame, refSpace) {
+  if (!handSource || !handSource.hand || !frame || !refSpace) return null;
+  const ht = handSource.hand;
+
+  const joint =
+    ht.get?.(jointName) ||
+    (typeof XRHand !== 'undefined' && ht[XRHand[jointName.toUpperCase()]]);
+  if (!joint) return null;
+
+  return frame.getJointPose(joint, refSpace);
+}
+
+
 
 renderer.xr.addEventListener('sessionstart', async () => {
   const session = renderer.xr.getSession();
@@ -593,6 +685,8 @@ renderer.xr.addEventListener('sessionstart', async () => {
   const session = renderer.xr.getSession();
   xrRefSpace = await session.requestReferenceSpace('local-floor');
   ensureWorldHud();
+  //hook unified pinch tracking
+  bindSessionInputEvents(session);
 
   session.addEventListener('selectstart',  (e)=> activeFlags['select'+labelFrom(e.inputSource)] = true);
   session.addEventListener('selectend',    (e)=> activeFlags['select'+labelFrom(e.inputSource)] = false);
@@ -611,23 +705,47 @@ renderer.xr.addEventListener('sessionend', () => {
 
 
 // --- Animate ---
+// --- Animate ---
 renderer.setAnimationLoop((t, frame) => {
   const dt = t * 0.001;
   box.rotation.y = dt * 0.7;
 
   handleController(controller1);
   handleController(controller2);
-   // Slider updates
+
+  // Slider updates
   updateSliderPose(frame);
 
-    // Ensure the tilt stays applied no matter what
+  // Ensure the tilt stays applied no matter what
   sliderTilt.rotation.x = PANEL_TILT_X;
 
   updateSliderInteraction(frame);
-   // keep the text refreshed (shows even before first pinch)
+
+  // keep the text refreshed (shows even before first pinch)
   updateVoltageLabel(sliderValue);
 
+  // 🔹 Get XR session once, at the top of the loop
+  const xrSession = renderer.xr.getSession ? renderer.xr.getSession() : null;
 
+  // 🔹 NEW: get logical inputs for this frame
+  const logical = xrSession ? getLogicalInputs(xrSession) : null;
+
+  // Example 1: use logical.pinch as your main selection ray
+  if (logical && logical.pinch && frame && xrRefSpace) {
+    const pose = getTargetRayPose(logical.pinch, frame, xrRefSpace);
+    if (pose) {
+      // pose.transform.position / orientation
+      // You could e.g. drive your raycast / selection from this
+      // (On Quest: this will be controller or hand. On AVP: transient-pointer.)
+    }
+  }
+
+  // Example 2: use logical.right / logical.left as your main side-based inputs
+  // (Works cross-platform, regardless of hand/ctrl/transient)
+  if (logical && logical.right && frame && xrRefSpace) {
+    const rightRayPose = getTargetRayPose(logical.right, frame, xrRefSpace);
+    // you can use this for a "right side" ray source if you want
+  }
 
   // Header: compact booleans for actions
   const header =
@@ -636,15 +754,16 @@ renderer.setAnimationLoop((t, frame) => {
     `SQZ[L:${+!!activeFlags.squeezeL} R:${+!!activeFlags.squeezeR}]`;
 
   // Lines per input source, wrapped later
-  const session = renderer.xr.getSession?.();
-  const bodyLines = (session && xrRefSpace) ? formatInputs(session, frame, xrRefSpace)
-                                            : ['XR session not active.'];
+  const bodyLines = (xrSession && xrRefSpace)
+    ? formatInputs(xrSession, frame, xrRefSpace)
+    : ['XR session not active.'];
 
   drawHud(header, bodyLines);
 
   orbit.update();
   renderer.render(scene, camera);
 });
+
 
 
 

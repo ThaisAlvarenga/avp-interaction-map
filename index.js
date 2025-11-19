@@ -1,3 +1,5 @@
+// NEW JS WITH PANEL TITL X
+
 // Use one consistent Three.js version everywhere (here: 0.165.0)
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { OrbitControls } from "https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js";

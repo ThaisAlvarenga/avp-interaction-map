@@ -1,4 +1,4 @@
-// NEW JS WITH PANEL TITL X
+// Testin slider with raycast + btn 0
 
 // Use one consistent Three.js version everywhere (here: 0.165.0)
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
@@ -105,6 +105,7 @@ window.addEventListener("resize", () => {
 const tempMatrix = new THREE.Matrix4();
 const raycaster = new THREE.Raycaster();
 const selectable = [box];
+const sliderRay = new THREE.Raycaster(); // for knob hit-testing
 
 // Controller 1 (primary)
 const controller1 = renderer.xr.getController(0);
@@ -422,6 +423,7 @@ renderer.xr.addEventListener('sessionstart', async () => {
 
 // Pose sliderRoot at left wrist (or left controller grip if no hands)
 const _tmpObj = new THREE.Object3D();
+
 function updateSliderPose(frame) {
   const session = renderer.xr.getSession?.();
   if (!session) return;
@@ -456,8 +458,9 @@ function updateSliderPose(frame) {
 }
 
 // Pinch-drag interaction (hands only)
-function updateSliderInteraction(frame) {
+function updateSliderInteraction(frame,  canDrag, rayOnKnob) {
   if (!xrRefSpace_local) return;
+  if (!canDrag || !rayOnKnob) return; // <--- gate by B0 + ray-on-knob
 
   const session = renderer.xr.getSession?.();
   if (!session) return;
@@ -721,42 +724,54 @@ renderer.setAnimationLoop((t, frame) => {
   const dt = t * 0.001;
   box.rotation.y = dt * 0.7;
 
+  // Handle box controller interaction
   handleController(controller1);
   handleController(controller2);
 
-  // Slider updates
-  updateSliderPose(frame);
-
-  // Ensure the tilt stays applied no matter what
-  sliderTilt.rotation.x = PANEL_TILT_X;
-
-  updateSliderInteraction(frame);
-
-  // keep the text refreshed (shows even before first pinch)
-  updateVoltageLabel(sliderValue);
-
-  // 🔹 Get XR session once, at the top of the loop
+  // 🔹 Get XR session & logical inputs first
   const xrSession = renderer.xr.getSession ? renderer.xr.getSession() : null;
+  const logical   = xrSession ? getLogicalInputs(xrSession) : null;
 
-  // 🔹 NEW: get logical inputs for this frame
-  const logical = xrSession ? getLogicalInputs(xrSession) : null;
+  // 🔹 Compute drag gating
+  let canDrag   = false;
+  let rayOnKnob = false;
 
-  // Example 1: use logical.pinch as your main selection ray
   if (logical && logical.pinch && frame && xrRefSpace) {
     const pose = getTargetRayPose(logical.pinch, frame, xrRefSpace);
     if (pose) {
-      // pose.transform.position / orientation
-      // You could e.g. drive your raycast / selection from this
-      // (On Quest: this will be controller or hand. On AVP: transient-pointer.)
+      // Build a world-space ray from the pinch / controller
+      const pos = pose.transform.position;
+      const ori = pose.transform.orientation;
+
+      const origin = new THREE.Vector3(pos.x, pos.y, pos.z);
+      const quat   = new THREE.Quaternion(ori.x, ori.y, ori.z, ori.w);
+      const dir    = new THREE.Vector3(0, 0, -1).applyQuaternion(quat).normalize();
+
+      // Raycast against the slider knob
+      sliderRay.set(origin, dir);
+      const knobHits = sliderRay.intersectObject(sliderKnob, true);
+      rayOnKnob = knobHits.length > 0;
+
+      // Check B0 on RIGHT side (where gamepad exists, e.g., Quest)
+      if (logical.pinch.gamepad && logical.pinch.handedness === 'right') {
+        const b0 = logical.pinch.gamepad.buttons[0]; // B0
+        if (b0 && b0.pressed) {
+          canDrag = true;
+        }
+      }
+
+      // (On AVP, logical.pinch is usually transient-pointer without gamepad;
+      // canDrag will stay false there, and slider will only move via hand pinch logic.)
     }
   }
 
-  // Example 2: use logical.right / logical.left as your main side-based inputs
-  // (Works cross-platform, regardless of hand/ctrl/transient)
-  if (logical && logical.right && frame && xrRefSpace) {
-    const rightRayPose = getTargetRayPose(logical.right, frame, xrRefSpace);
-    // you can use this for a "right side" ray source if you want
-  }
+  // 🔹 Slider pose & interaction
+  updateSliderPose(frame);
+  sliderTilt.rotation.x = PANEL_TILT_X;
+  updateSliderInteraction(frame, canDrag, rayOnKnob);
+
+  // Keep label refreshed
+  updateVoltageLabel(sliderValue);
 
   // Header: compact booleans for actions
   const header =
@@ -774,9 +789,6 @@ renderer.setAnimationLoop((t, frame) => {
   orbit.update();
   renderer.render(scene, camera);
 });
-
-
-
 
 
 

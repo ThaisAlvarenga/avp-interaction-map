@@ -101,7 +101,7 @@ So there are three inputs:
 - targetRayMode: "transient-pointer"
 - ```gamepad.buttons[0].pressed``` reflects the select action for the duration of the pinch
 
-The WebKit Blog documetation explains that:
+The [WebKit Blog](https://webkit.org/blog/15162/introducing-natural-input-for-webxr-in-apple-vision-pro/) documetation explains that:
 
 > Because the default WebXR input in visionOS is transient, that array is empty — until the user pinches… To differentiate this new input type, it has a targetRayMode of transient-pointer.”
 

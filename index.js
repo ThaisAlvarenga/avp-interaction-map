@@ -628,9 +628,16 @@ function wrapLines(str, maxWidth) {
 }
 
 function drawHud(header, bodyLines) {
+  // 🔹 Make sure HUD is initialized
+  if (!hudCanvas || !hudCtx || !hudMesh) {
+    ensureWorldHud();
+    // If still not ready, don’t draw this frame
+    if (!hudCanvas || !hudCtx || !hudMesh) return;
+  }
+
   const P = HUD_CFG.PADDING;
   const W = hudCanvas.width, H = hudCanvas.height;
-  const usableW = W - P*2;
+  const usableW = W - P * 2;
 
   hudCtx.clearRect(0, 0, W, H);
   hudCtx.fillStyle = HUD_CFG.BG;
@@ -651,7 +658,6 @@ function drawHud(header, bodyLines) {
   // Body
   hudCtx.font = HUD_CFG.FONT_BODY;
 
-  // Wrap each line; clip if overflows; show “+N more”
   const maxLines = Math.floor((H - y - P) / HUD_CFG.LINE_H);
   let used = 0, hiddenCount = 0;
 
@@ -667,18 +673,23 @@ function drawHud(header, bodyLines) {
       }
     }
   }
+
   if (hiddenCount > 0) {
     const ellip = `… +${hiddenCount} more`;
     hudCtx.fillText(ellip, P, H - P - HUD_CFG.LINE_H);
   }
 
   // Auto-scale plane height to used content (minimum preserved)
-  const usedHeightPx = Math.max(y + P, HUD_CFG.HEIGHT_PX * (HUD_CFG.MIN_PLANE_H_M / (HUD_CFG.PLANE_W_M * (HUD_CFG.HEIGHT_PX/HUD_CFG.WIDTH_PX))));
+  const usedHeightPx = Math.max(
+    y + P,
+    HUD_CFG.HEIGHT_PX * (HUD_CFG.MIN_PLANE_H_M / (HUD_CFG.PLANE_W_M * (HUD_CFG.HEIGHT_PX / HUD_CFG.WIDTH_PX)))
+  );
   const scaleY = usedHeightPx / HUD_CFG.HEIGHT_PX;
   hudMesh.scale.y = scaleY;
 
   hudTexture.needsUpdate = true;
 }
+
 
 // Bind XR events (request ref space + action flags)
 renderer.xr.addEventListener('sessionstart', async () => {

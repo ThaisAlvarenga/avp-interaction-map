@@ -48,6 +48,120 @@ orbit.target.set(0, 1.4, 0);
 // update the orbit to use the new target
 orbit.enableDamping = true;
 
+
+// --- Hand Debug Setup (joint cubes + palm cube) ---
+
+// WebXR hand joint names (25 joints)
+const HAND_JOINT_NAMES = [
+  'wrist',
+
+  'thumb-metacarpal',
+  'thumb-phalanx-proximal',
+  'thumb-phalanx-distal',
+  'thumb-tip',
+
+  'index-finger-metacarpal',
+  'index-finger-phalanx-proximal',
+  'index-finger-phalanx-intermediate',
+  'index-finger-phalanx-distal',
+  'index-finger-tip',
+
+  'middle-finger-metacarpal',
+  'middle-finger-phalanx-proximal',
+  'middle-finger-phalanx-intermediate',
+  'middle-finger-phalanx-distal',
+  'middle-finger-tip',
+
+  'ring-finger-metacarpal',
+  'ring-finger-phalanx-proximal',
+  'ring-finger-phalanx-intermediate',
+  'ring-finger-phalanx-distal',
+  'ring-finger-tip',
+
+  'pinky-finger-metacarpal',
+  'pinky-finger-phalanx-proximal',
+  'pinky-finger-phalanx-intermediate',
+  'pinky-finger-phalanx-distal',
+  'pinky-finger-tip'
+];
+
+// Keep meshes for each hand & joint
+const handJointMeshes = {
+  left:  new Map(), // jointName -> THREE.Mesh
+  right: new Map()
+};
+
+// One palm-base cube per hand
+const handPalmMeshes = {
+  left: null,
+  right: null
+};
+
+// Simple per-finger definition for curl
+const FINGERS = {
+  thumb:  { base: 'thumb-metacarpal',           tip: 'thumb-tip' },
+  index:  { base: 'index-finger-metacarpal',    tip: 'index-finger-tip' },
+  middle: { base: 'middle-finger-metacarpal',   tip: 'middle-finger-tip' },
+  ring:   { base: 'ring-finger-metacarpal',     tip: 'ring-finger-tip' },
+  pinky:  { base: 'pinky-finger-metacarpal',    tip: 'pinky-finger-tip' }
+};
+
+// "How short is the finger to count as curled?" (~4.5cm)
+const FINGER_CURL_THRESHOLD = 0.045;
+
+/**
+ * A little cube at every joint of each hand 
+ *          magenta for left,
+ *          cyan for right
+ * Each finger tip cube:
+ *          normal color when extended,
+ *          red when curled (finger bent enough).
+ * A larger cube at the wrist:
+ *          green when palm facing up,
+ *          red when palm facing down,
+ *          blue/cyan when sideways.
+ */
+
+// Create joint debug meshes + palm base meshes
+function initHandDebugMeshes() {
+  const jointGeom = new THREE.BoxGeometry(0.008, 0.008, 0.008);
+  const leftColor  = new THREE.Color(0xff00ff);
+  const rightColor = new THREE.Color(0x00ffff);
+
+  ['left', 'right'].forEach((handedness) => {
+    const isLeft = handedness === 'left';
+    const baseColor = isLeft ? leftColor : rightColor;
+
+    HAND_JOINT_NAMES.forEach((jointName) => {
+      const mat = new THREE.MeshBasicMaterial({
+        color: baseColor.clone(),
+        transparent: true,
+        opacity: 0.9
+      });
+      const mesh = new THREE.Mesh(jointGeom, mat);
+      mesh.visible = false; // will show when we get tracking
+      scene.add(mesh);
+      handJointMeshes[handedness].set(jointName, mesh);
+    });
+
+    // Palm base cube (a bit bigger)
+    const palmGeom = new THREE.BoxGeometry(0.04, 0.025, 0.006);
+    const palmMat  = new THREE.MeshBasicMaterial({
+      color: baseColor.clone(),
+      transparent: true,
+      opacity: 0.95
+    });
+    const palmMesh = new THREE.Mesh(palmGeom, palmMat);
+    palmMesh.visible = false;
+    scene.add(palmMesh);
+    handPalmMeshes[handedness] = palmMesh;
+  });
+}
+
+// Call this once after scene is created:
+initHandDebugMeshes();
+
+
 // --- Lights ---
 // hemisphere light for ambient lighting
 scene.add(new THREE.HemisphereLight(0xbbbbcc, 0x222233, 0.6));
@@ -59,7 +173,6 @@ dir.position.set(1, 3, 2);
 dir.castShadow = true;
 // add setup shadow properties for the light
 scene.add(dir);
-
 
 
 // --- Floor ---
@@ -408,6 +521,188 @@ function getHandJointPose(handSource, jointName, frame, refSpace) {
   return frame.getJointPose(joint, refSpace);
 }
 
+function getHandJointSpace(xrHand, jointName) {
+  if (!xrHand) return null;
+
+  // Newer browsers: Map-like .get()
+  if (xrHand.get) {
+    return xrHand.get(jointName) || null;
+  }
+
+  // Fallback to XRHand constants (older style)
+  if (typeof XRHand !== 'undefined' && XRHand[jointName.toUpperCase()]) {
+    return xrHand[XRHand[jointName.toUpperCase()]] || null;
+  }
+
+  return null;
+}
+
+const _vTemp1 = new THREE.Vector3();
+const _vTemp2 = new THREE.Vector3();
+const _vTemp3 = new THREE.Vector3();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+
+function updateHandDebug(frame) {
+  const session = renderer.xr.getSession ? renderer.xr.getSession() : null;
+  if (!session || !frame || !xrRefSpace) return;
+
+  ['left', 'right'].forEach((handedness) => {
+    const src = findHand(session, handedness);
+    const jointMap = handJointMeshes[handedness];
+    const palmMesh = handPalmMeshes[handedness];
+
+    if (!src || !src.hand) {
+      // No hand: hide all meshes
+      jointMap.forEach(m => m.visible = false);
+      if (palmMesh) palmMesh.visible = false;
+      return;
+    }
+
+    const hand = src.hand;
+
+    // --- first: get wrist pose (for palm & curl ref) ---
+    const wristSpace = getHandJointSpace(hand, 'wrist');
+    const wristPose  = wristSpace ? frame.getJointPose(wristSpace, xrRefSpace) : null;
+    if (!wristPose) {
+      jointMap.forEach(m => m.visible = false);
+      if (palmMesh) palmMesh.visible = false;
+      return;
+    }
+
+    const wristPos = _vTemp1.set(
+      wristPose.transform.position.x,
+      wristPose.transform.position.y,
+      wristPose.transform.position.z
+    );
+
+    // --- 1) Update each joint cube position, rotation, approximate scale ---
+    HAND_JOINT_NAMES.forEach((jointName) => {
+      const mesh = jointMap.get(jointName);
+      if (!mesh) return;
+
+      const jointSpace = getHandJointSpace(hand, jointName);
+      if (!jointSpace) {
+        mesh.visible = false;
+        return;
+      }
+
+      const jp = frame.getJointPose(jointSpace, xrRefSpace);
+      if (!jp) {
+        mesh.visible = false;
+        return;
+      }
+
+      mesh.visible = true;
+      const t = jp.transform;
+      mesh.position.set(t.position.x, t.position.y, t.position.z);
+      mesh.quaternion.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
+
+      // Optionally use radius if provided
+      const r = jp.radius !== undefined ? jp.radius : 0.008;
+      mesh.scale.setScalar(r * 2.0);
+    });
+
+    // --- 2) Finger curl detection: recolor tip cubes when curled ---
+    // Base color per hand
+    const baseHex   = handedness === 'left' ? 0xff00ff : 0x00ffff;
+    const curledHex = 0xff5555; // red-ish when curled
+
+    for (const fingerName in FINGERS) {
+      const def = FINGERS[fingerName];
+      const baseSpace = getHandJointSpace(hand, def.base);
+      const tipSpace  = getHandJointSpace(hand, def.tip);
+      if (!baseSpace || !tipSpace) continue;
+
+      const basePose = frame.getJointPose(baseSpace, xrRefSpace);
+      const tipPose  = frame.getJointPose(tipSpace, xrRefSpace);
+      if (!basePose || !tipPose) continue;
+
+      const basePos = _vTemp2.set(
+        basePose.transform.position.x,
+        basePose.transform.position.y,
+        basePose.transform.position.z
+      );
+      const tipPos = _vTemp3.set(
+        tipPose.transform.position.x,
+        tipPose.transform.position.y,
+        tipPose.transform.position.z
+      );
+
+      const extension = basePos.distanceTo(tipPos);
+      const isCurled = extension < FINGER_CURL_THRESHOLD;
+
+      // Color the *tip* cube
+      const tipMesh = jointMap.get(def.tip);
+      if (tipMesh) {
+        tipMesh.material.color.setHex(isCurled ? curledHex : baseHex);
+      }
+    }
+
+    // --- 3) Palm orientation: move & recolor palm base cube ---
+    if (palmMesh) {
+      // Use index & pinky metacarpals + middle metacarpal to approximate palm plane
+      const indexMetaSpace  = getHandJointSpace(hand, 'index-finger-metacarpal');
+      const pinkyMetaSpace  = getHandJointSpace(hand, 'pinky-finger-metacarpal');
+      const middleMetaSpace = getHandJointSpace(hand, 'middle-finger-metacarpal');
+
+      const indexPose  = indexMetaSpace  ? frame.getJointPose(indexMetaSpace,  xrRefSpace) : null;
+      const pinkyPose  = pinkyMetaSpace  ? frame.getJointPose(pinkyMetaSpace,  xrRefSpace) : null;
+      const middlePose = middleMetaSpace ? frame.getJointPose(middleMetaSpace, xrRefSpace) : null;
+
+      if (indexPose && pinkyPose && middlePose) {
+        const idxPos = new THREE.Vector3(
+          indexPose.transform.position.x,
+          indexPose.transform.position.y,
+          indexPose.transform.position.z
+        );
+        const pnkPos = new THREE.Vector3(
+          pinkyPose.transform.position.x,
+          pinkyPose.transform.position.y,
+          pinkyPose.transform.position.z
+        );
+        const midPos = new THREE.Vector3(
+          middlePose.transform.position.x,
+          middlePose.transform.position.y,
+          middlePose.transform.position.z
+        );
+
+        // Side vector across palm (index→pinky) and forward (wrist→middle)
+        const vSide    = pnkPos.clone().sub(idxPos);
+        const vForward = midPos.clone().sub(wristPos);
+
+        // Normal = side × forward  (you can flip if it feels inverted)
+        const palmNormal = vSide.clone().cross(vForward).normalize();
+
+        // Place palm cube at wrist
+        palmMesh.visible = true;
+        palmMesh.position.copy(wristPos);
+
+        // Align cube's local +Z axis with palm normal
+        const localZ = new THREE.Vector3(0, 0, 1);
+        const q = new THREE.Quaternion().setFromUnitVectors(localZ, palmNormal);
+        palmMesh.quaternion.copy(q);
+
+        // Simple facing classification (up/down/side) for color
+        const dotUp = palmNormal.dot(WORLD_UP);
+        let palmColor;
+
+        if (dotUp > 0.5) {
+          // Palm facing up
+          palmColor = 0x55ff55; // green
+        } else if (dotUp < -0.5) {
+          // Palm facing down
+          palmColor = 0xff5555; // red
+        } else {
+          // Sideways-ish
+          palmColor = handedness === 'left' ? 0x5555ff : 0x55ffff;
+        }
+        palmMesh.material.color.setHex(palmColor);
+      } else {
+        palmMesh.visible = false;
+      }
+    }
+  });
+}
 
 
 renderer.xr.addEventListener('sessionstart', async () => {
@@ -741,6 +1036,11 @@ renderer.setAnimationLoop((t, frame) => {
 
   // 🔹 NEW: get logical inputs for this frame
   const logical = xrSession ? getLogicalInputs(xrSession) : null;
+
+  // update joint debug cubes + palm orientation
+  if (frame && xrRefSpace) {
+    updateHandDebug(frame);
+  }
 
   // Example 1: use logical.pinch as your main selection ray
   if (logical && logical.pinch && frame && xrRefSpace) {

@@ -96,9 +96,11 @@ const handPalmMeshes = {
   right: null
 };
 
+
+
 // Simple per-finger definition for curl
 const FINGERS = {
-  thumb:  { base: 'thumb-metacarpal',           tip: 'thumb-tip' },
+  thumb:  { base: 'thumb-phalanx-proximal',           tip: 'thumb-tip' },
   index:  { base: 'index-finger-metacarpal',    tip: 'index-finger-tip' },
   middle: { base: 'middle-finger-metacarpal',   tip: 'middle-finger-tip' },
   ring:   { base: 'ring-finger-metacarpal',     tip: 'ring-finger-tip' },
@@ -106,7 +108,7 @@ const FINGERS = {
 };
 
 // "How short is the finger to count as curled?" (~4.5cm)
-const FINGER_CURL_THRESHOLD = 0.045;
+const FINGER_CURL_THRESHOLD = 0.065;
 
 // global debug  hand object
 const handState = {
@@ -128,7 +130,7 @@ const handState = {
  */
 
 function initHandDebugMeshes() {
-  const jointGeom = new THREE.BoxGeometry(0.008, 0.008, 0.008);
+  const jointGeom = new THREE.BoxGeometry(0.8, 0.8, 0.8);
   const leftColor  = new THREE.Color(0xff00ff);
   const rightColor = new THREE.Color(0x00ffff);
 

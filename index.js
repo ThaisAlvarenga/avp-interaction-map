@@ -109,6 +109,12 @@ const FINGERS = {
 // "How short is the finger to count as curled?" (~4.5cm)
 const FINGER_CURL_THRESHOLD = 0.045;
 
+// global debug  hand object
+const handState = {
+  left:  { curls:{}, palm:'' },
+  right: { curls:{}, palm:'' }
+};
+
 /**
  * A little cube at every joint of each hand 
  *          magenta for left,
@@ -542,9 +548,9 @@ const _vTemp2 = new THREE.Vector3();
 const _vTemp3 = new THREE.Vector3();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
-function updateHandDebug(frame) {
+function updateHandDebug(frame, refSpace) {
   const session = renderer.xr.getSession ? renderer.xr.getSession() : null;
-  if (!session || !frame || !xrRefSpace) return;
+  if (!session || !frame || !refSpace) return;
 
   ['left', 'right'].forEach((handedness) => {
     const src = findHand(session, handedness);
@@ -562,7 +568,7 @@ function updateHandDebug(frame) {
 
     // --- first: get wrist pose (for palm & curl ref) ---
     const wristSpace = getHandJointSpace(hand, 'wrist');
-    const wristPose  = wristSpace ? frame.getJointPose(wristSpace, xrRefSpace) : null;
+    const wristPose  = wristSpace ? frame.getJointPose(wristSpace, refSpace) : null;
     if (!wristPose) {
       jointMap.forEach(m => m.visible = false);
       if (palmMesh) palmMesh.visible = false;
@@ -586,7 +592,7 @@ function updateHandDebug(frame) {
         return;
       }
 
-      const jp = frame.getJointPose(jointSpace, xrRefSpace);
+      const jp = frame.getJointPose(jointSpace, refSpace);
       if (!jp) {
         mesh.visible = false;
         return;
@@ -613,8 +619,8 @@ function updateHandDebug(frame) {
       const tipSpace  = getHandJointSpace(hand, def.tip);
       if (!baseSpace || !tipSpace) continue;
 
-      const basePose = frame.getJointPose(baseSpace, xrRefSpace);
-      const tipPose  = frame.getJointPose(tipSpace, xrRefSpace);
+      const basePose = frame.getJointPose(baseSpace, refSpace);
+      const tipPose  = frame.getJointPose(tipSpace, refSpace);
       if (!basePose || !tipPose) continue;
 
       const basePos = _vTemp2.set(
@@ -631,6 +637,9 @@ function updateHandDebug(frame) {
       const extension = basePos.distanceTo(tipPos);
       const isCurled = extension < FINGER_CURL_THRESHOLD;
 
+      // store curl state
+      handState[handedness].curls[fingerName] = isCurled;
+
       // Color the *tip* cube
       const tipMesh = jointMap.get(def.tip);
       if (tipMesh) {
@@ -645,9 +654,9 @@ function updateHandDebug(frame) {
       const pinkyMetaSpace  = getHandJointSpace(hand, 'pinky-finger-metacarpal');
       const middleMetaSpace = getHandJointSpace(hand, 'middle-finger-metacarpal');
 
-      const indexPose  = indexMetaSpace  ? frame.getJointPose(indexMetaSpace,  xrRefSpace) : null;
-      const pinkyPose  = pinkyMetaSpace  ? frame.getJointPose(pinkyMetaSpace,  xrRefSpace) : null;
-      const middlePose = middleMetaSpace ? frame.getJointPose(middleMetaSpace, xrRefSpace) : null;
+      const indexPose  = indexMetaSpace  ? frame.getJointPose(indexMetaSpace,  refSpace) : null;
+      const pinkyPose  = pinkyMetaSpace  ? frame.getJointPose(pinkyMetaSpace,  refSpace) : null;
+      const middlePose = middleMetaSpace ? frame.getJointPose(middleMetaSpace, refSpace) : null;
 
       if (indexPose && pinkyPose && middlePose) {
         const idxPos = new THREE.Vector3(
@@ -673,6 +682,10 @@ function updateHandDebug(frame) {
         // Normal = side × forward  (you can flip if it feels inverted)
         const palmNormal = vSide.clone().cross(vForward).normalize();
 
+        if (handedness === 'right') {
+          palmNormal.multiplyScalar(-1); // invert only right hand
+          }
+
         // Place palm cube at wrist
         palmMesh.visible = true;
         palmMesh.position.copy(wristPos);
@@ -689,12 +702,15 @@ function updateHandDebug(frame) {
         if (dotUp > 0.5) {
           // Palm facing up
           palmColor = 0x55ff55; // green
+          handState[handedness].palm = "UP";
         } else if (dotUp < -0.5) {
           // Palm facing down
           palmColor = 0xff5555; // red
+          handState[handedness].palm = "DOWN";
         } else {
           // Sideways-ish
           palmColor = handedness === 'left' ? 0x5555ff : 0x55ffff;
+          handState[handedness].palm = "SIDE";
         }
         palmMesh.material.color.setHex(palmColor);
       } else {
@@ -827,7 +843,7 @@ const HUD_CFG = {
 const activeFlags = { selectL:false, selectR:false, squeezeL:false, squeezeR:false };
 function labelFrom(src) { return (src.handedness || 'none')[0].toUpperCase(); } // L/R/N
 
-let xrRefSpace = null;
+let refSpace = null;
 
 const PINCH_THRESHOLD_METERS = 0.018;
 const ff = (x, d=2) => (x!==undefined && x!==null) ? x.toFixed(d) : '—';
@@ -870,6 +886,19 @@ function formatInputs(session, frame, refSpace) {
         label += ` | pinch: n/a`;
       }
     }
+
+    if (src.hand) {
+  const hs = handState[src.handedness];
+
+  if (hs) {
+    const curlStrings = Object.entries(hs.curls)
+      .map(([name, curled]) => `${name[0]}:${curled?'1':'0'}`)
+      .join(' ');
+
+    label += ` | curls: ${curlStrings}`;
+    label += ` | palm:${hs.palm}`;
+  }
+}
 
     // Target ray (kept concise)
     if (src.targetRayMode) label += ` | ray:${src.targetRayMode}`;
@@ -990,7 +1019,7 @@ function drawHud(header, bodyLines) {
 // Bind XR events (request ref space + action flags)
 renderer.xr.addEventListener('sessionstart', async () => {
   const session = renderer.xr.getSession();
-  xrRefSpace = await session.requestReferenceSpace('local-floor');
+  refSpace = await session.requestReferenceSpace('local-floor');
   ensureWorldHud();
   //hook unified pinch tracking
   bindSessionInputEvents(session);
@@ -1004,7 +1033,7 @@ renderer.xr.addEventListener('sessionstart', async () => {
 });
 
 renderer.xr.addEventListener('sessionend', () => {
-  xrRefSpace = null;
+  refSpace = null;
   ensureWorldHud();
   drawHud('XR Input: session ended', []);
 });
@@ -1038,13 +1067,13 @@ renderer.setAnimationLoop((t, frame) => {
   const logical = xrSession ? getLogicalInputs(xrSession) : null;
 
   // update joint debug cubes + palm orientation
-  if (frame && xrRefSpace) {
-    updateHandDebug(frame);
+  if (frame && xrRefSpace_local) {
+    updateHandDebug(frame, xrRefSpace_local);
   }
 
   // Example 1: use logical.pinch as your main selection ray
-  if (logical && logical.pinch && frame && xrRefSpace) {
-    const pose = getTargetRayPose(logical.pinch, frame, xrRefSpace);
+  if (logical && logical.pinch && frame && refSpace) {
+    const pose = getTargetRayPose(logical.pinch, frame, refSpace);
     if (pose) {
       // pose.transform.position / orientation
       // You could e.g. drive your raycast / selection from this
@@ -1054,8 +1083,8 @@ renderer.setAnimationLoop((t, frame) => {
 
   // Example 2: use logical.right / logical.left as your main side-based inputs
   // (Works cross-platform, regardless of hand/ctrl/transient)
-  if (logical && logical.right && frame && xrRefSpace) {
-    const rightRayPose = getTargetRayPose(logical.right, frame, xrRefSpace);
+  if (logical && logical.right && frame && refSpace) {
+    const rightRayPose = getTargetRayPose(logical.right, frame, refSpace);
     // you can use this for a "right side" ray source if you want
   }
 
@@ -1066,8 +1095,8 @@ renderer.setAnimationLoop((t, frame) => {
     `SQZ[L:${+!!activeFlags.squeezeL} R:${+!!activeFlags.squeezeR}]`;
 
   // Lines per input source, wrapped later
-  const bodyLines = (xrSession && xrRefSpace)
-    ? formatInputs(xrSession, frame, xrRefSpace)
+  const bodyLines = (xrSession && refSpace)
+    ? formatInputs(xrSession, frame, refSpace)
     : ['XR session not active.'];
 
   drawHud(header, bodyLines);

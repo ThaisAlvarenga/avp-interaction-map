@@ -52,6 +52,11 @@ orbit.enableDamping = true;
 // --- Hand Debug Setup (joint cubes + palm cube) ---
 
 // WebXR hand joint names (25 joints)
+
+const JOINT_COUNT = 25;
+const jointRadii = new Float32Array(JOINT_COUNT);
+const jointMatrices = new Float32Array(16 * JOINT_COUNT);
+
 const HAND_JOINT_NAMES = [
   'wrist',
 
@@ -548,6 +553,14 @@ const _vTemp2 = new THREE.Vector3();
 const _vTemp3 = new THREE.Vector3();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
+function getJointPositionByIndex(index) {
+    const arr = jointMatrices.slice(index * 16, (index + 1) * 16);
+    const m = new THREE.Matrix4().fromArray(arr);
+    const pos = new THREE.Vector3();
+    m.decompose(pos, new THREE.Quaternion(), new THREE.Vector3());
+    return pos;
+}
+
 function updateHandDebug(frame, refSpace) {
   const session = renderer.xr.getSession ? renderer.xr.getSession() : null;
   if (!session || !frame || !refSpace) return;
@@ -567,6 +580,11 @@ function updateHandDebug(frame, refSpace) {
     const hand = src.hand;
 
     // --- first: get wrist pose (for palm & curl ref) ---
+    // batch-read ALL joint transforms at once ---
+    // This replaces getJointPose() for accuracy and VisionOS compatibility.
+        if (!frame.fillJointRadii(hand.values(), jointRadii)) return;
+        if (!frame.fillPoses(hand.values(), refSpace, jointMatrices)) return;
+
     const wristSpace = getHandJointSpace(hand, 'wrist');
     const wristPose  = wristSpace ? frame.getJointPose(wristSpace, refSpace) : null;
     if (!wristPose) {
@@ -581,32 +599,55 @@ function updateHandDebug(frame, refSpace) {
       wristPose.transform.position.z
     );
 
+    // --- 1) Update each joint cube from batched jointMatrices ---
+let jIndex = 0;
+for (const [jointName, mesh] of handJointMeshes[handedness].entries()) {
+    const m = new THREE.Matrix4().fromArray(jointMatrices.slice(jIndex*16, (jIndex+1)*16));
+
+    // Decompose into pos/rot/scale
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    m.decompose(pos, quat, scl);
+
+    mesh.visible = true;
+    mesh.position.copy(pos);
+    mesh.quaternion.copy(quat);
+
+    // Use radius when provided
+    const radius = jointRadii[jIndex] || 0.008;
+    mesh.scale.setScalar(radius * 2.0);
+
+    jIndex++;
+}
+
+
     // --- 1) Update each joint cube position, rotation, approximate scale ---
-    HAND_JOINT_NAMES.forEach((jointName) => {
-      const mesh = jointMap.get(jointName);
-      if (!mesh) return;
+    // HAND_JOINT_NAMES.forEach((jointName) => {
+    //   const mesh = jointMap.get(jointName);
+    //   if (!mesh) return;
 
-      const jointSpace = getHandJointSpace(hand, jointName);
-      if (!jointSpace) {
-        mesh.visible = false;
-        return;
-      }
+    //   const jointSpace = getHandJointSpace(hand, jointName);
+    //   if (!jointSpace) {
+    //     mesh.visible = false;
+    //     return;
+    //   }
 
-      const jp = frame.getJointPose(jointSpace, refSpace);
-      if (!jp) {
-        mesh.visible = false;
-        return;
-      }
+    //   const jp = frame.getJointPose(jointSpace, refSpace);
+    //   if (!jp) {
+    //     mesh.visible = false;
+    //     return;
+    //   }
 
-      mesh.visible = true;
-      const t = jp.transform;
-      mesh.position.set(t.position.x, t.position.y, t.position.z);
-      mesh.quaternion.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
+    //   mesh.visible = true;
+    //   const t = jp.transform;
+    //   mesh.position.set(t.position.x, t.position.y, t.position.z);
+    //   mesh.quaternion.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
 
-      // Optionally use radius if provided
-      const r = jp.radius !== undefined ? jp.radius : 0.008;
-      mesh.scale.setScalar(r * 2.0);
-    });
+    //   // Optionally use radius if provided
+    //   const r = jp.radius !== undefined ? jp.radius : 0.008;
+    //   mesh.scale.setScalar(r * 2.0);
+    // });
 
     // --- 2) Finger curl detection: recolor tip cubes when curled ---
     // Base color per hand
@@ -614,38 +655,24 @@ function updateHandDebug(frame, refSpace) {
     const curledHex = 0xff5555; // red-ish when curled
 
     for (const fingerName in FINGERS) {
-      const def = FINGERS[fingerName];
-      const baseSpace = getHandJointSpace(hand, def.base);
-      const tipSpace  = getHandJointSpace(hand, def.tip);
-      if (!baseSpace || !tipSpace) continue;
+    const def = FINGERS[fingerName];
 
-      const basePose = frame.getJointPose(baseSpace, refSpace);
-      const tipPose  = frame.getJointPose(tipSpace, refSpace);
-      if (!basePose || !tipPose) continue;
+    const baseIndex = HAND_JOINT_NAMES.indexOf(def.base);
+    const tipIndex  = HAND_JOINT_NAMES.indexOf(def.tip);
 
-      const basePos = _vTemp2.set(
-        basePose.transform.position.x,
-        basePose.transform.position.y,
-        basePose.transform.position.z
-      );
-      const tipPos = _vTemp3.set(
-        tipPose.transform.position.x,
-        tipPose.transform.position.y,
-        tipPose.transform.position.z
-      );
+    const basePos = getJointPositionByIndex(baseIndex);
+    const tipPos  = getJointPositionByIndex(tipIndex);
 
-      const extension = basePos.distanceTo(tipPos);
-      const isCurled = extension < FINGER_CURL_THRESHOLD;
+    const extension = basePos.distanceTo(tipPos);
+    const isCurled = extension < FINGER_CURL_THRESHOLD;
 
-      // store curl state
-      handState[handedness].curls[fingerName] = isCurled;
+    handState[handedness].curls[fingerName] = isCurled;
 
-      // Color the *tip* cube
-      const tipMesh = jointMap.get(def.tip);
-      if (tipMesh) {
-        tipMesh.material.color.setHex(isCurled ? curledHex : baseHex);
-      }
+    const tipMesh = handJointMeshes[handedness].get(def.tip);
+    if (tipMesh) {
+        tipMesh.material.color.setHex(isCurled ? 0xff5555 : baseHex);
     }
+}
 
     // --- 3) Palm orientation: move & recolor palm base cube ---
     if (palmMesh) {

@@ -110,7 +110,7 @@ const FINGER_CURL_THRESHOLD = 0.055;
 
 // Per-finger overrides (thumb is shorter!)
 const FINGER_THRESHOLDS = {
-  thumb:  0.035, // ~2.8 cm → treat as extended more often
+  thumb:  0.085, // ~2.8 cm → treat as extended more often
   index:  0.055,
   middle: 0.055,
   ring:   0.055,

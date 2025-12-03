@@ -108,6 +108,16 @@ const FINGERS = {
 // "How short is the finger to count as curled?" (~4.5cm)
 const FINGER_CURL_THRESHOLD = 0.045;
 
+// Per-finger overrides (thumb is shorter!)
+const FINGER_THRESHOLDS = {
+  thumb:  0.028, // ~2.8 cm → treat as extended more often
+  index:  0.045,
+  middle: 0.045,
+  ring:   0.045,
+  pinky:  0.040
+};
+
+
 // global debug  hand object
 const handState = {
   left:  { curls:{}, palm:'' },
@@ -541,9 +551,17 @@ function updateHandDebug(frame, refSpace) {
       if (!basePos || !tipPos) continue;
 
       const extension = basePos.distanceTo(tipPos);
-      const isCurled = extension < FINGER_CURL_THRESHOLD;
+
+// Use a per-finger threshold if available, otherwise the default
+const threshold = FINGER_THRESHOLDS[fingerName] ?? FINGER_CURL_THRESHOLD;
+const isCurled = extension < threshold;
 
       handState[handedness].curls[fingerName] = isCurled;
+      // After computing `extension` inside the curl loop:
+if (fingerName === 'thumb' && handedness === 'right') {
+  // Just as a quick peek, for example:
+  handState[handedness].thumbExtension = extension;
+}
 
       const tipMesh = jointMap.get(def.tip);
       if (tipMesh) {
@@ -771,6 +789,9 @@ function formatInputs(session, frame, refSpace) {
           .map(([name, curled]) => `${name[0]}:${curled?'1':'0'}`)
           .join(' ');
         label += ` | curls: ${curlStrings}`;
+        if (hs && hs.thumbExtension !== undefined) {
+  label += ` | tLen:${ff(hs.thumbExtension, 3)}m`;
+}
         label += ` | palm:${hs.palm}`;
       }
     }

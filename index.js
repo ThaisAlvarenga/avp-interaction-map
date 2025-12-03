@@ -106,15 +106,15 @@ const FINGERS = {
 };
 
 // "How short is the finger to count as curled?" (~4.5cm)
-const FINGER_CURL_THRESHOLD = 0.045;
+const FINGER_CURL_THRESHOLD = 0.055;
 
 // Per-finger overrides (thumb is shorter!)
 const FINGER_THRESHOLDS = {
-  thumb:  0.028, // ~2.8 cm → treat as extended more often
-  index:  0.045,
-  middle: 0.045,
-  ring:   0.045,
-  pinky:  0.040
+  thumb:  0.035, // ~2.8 cm → treat as extended more often
+  index:  0.055,
+  middle: 0.055,
+  ring:   0.055,
+  pinky:  0.050
 };
 
 

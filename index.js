@@ -117,7 +117,7 @@ const handState = {
 
 function initHandDebugMeshes() {
   // NOTE: this is huge (0.8m). If you meant 8mm, use 0.008.
-  const jointGeom = new THREE.BoxGeometry(0.008, 0.008, 0.008);
+  const jointGeom = new THREE.BoxGeometry(0.8, 0.8, 0.8);
 
   const leftColor = new THREE.Color(0xff00ff);
   const rightColor = new THREE.Color(0x00ffff);

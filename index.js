@@ -660,7 +660,7 @@ const _camFwd = new THREE.Vector3();
 
 function isMoveForwardGesture() {
   const r = handState.right?.curls || {};
-  return !!(r.pinky && r.ring && r.middle); // right: pinky+ring+middle curled
+  return !!(r.index && r.pinky && r.ring && r.middle); // right: index+pinky+ring+middle curled
 }
 
 function isMoveBackwardGesture() {
